@@ -10,7 +10,7 @@ export default function VideoPlayer({ embedUrl, embedHtml, posterUrl, title }) {
   // Extract clean embed URL if embedHtml was passed instead
   let rawUrl = embedUrl;
   if (!rawUrl && embedHtml) {
-    const match = embedHtml.match(/src="([^"]+)"/i);
+    const match = embedHtml.match(/src=["']([^"']+)["']/i);
     if (match) rawUrl = match[1];
   }
 

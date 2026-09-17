@@ -109,7 +109,8 @@ export function getMovieEmbedUrl(post) {
   if (post.meta?.dood_embed) return post.meta.dood_embed;
 
   const contentStr = post.content?.rendered || '';
-  const iframeMatch = contentStr.match(/<iframe.*?src="([^"]+)".*?<\/iframe>/i);
+  const iframeMatch = contentStr.match(/<iframe.*?src=["']([^"']+)["'].*?<\/iframe>/i) ||
+                      contentStr.match(/src=["'](https?:\/\/[^"']+)["']/i);
   if (iframeMatch) return iframeMatch[1];
 
   return null;

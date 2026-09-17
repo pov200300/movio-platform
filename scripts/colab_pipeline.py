@@ -16,10 +16,14 @@ import sys
 import re
 import time
 import json
+import shutil
+import zipfile
+import io
 import requests
 import subprocess
 from urllib.parse import quote
 from requests.auth import HTTPBasicAuth
+from bs4 import BeautifulSoup
 
 # Optional progress-tracked multipart upload
 try:
@@ -35,15 +39,26 @@ try:
 except ImportError:
     pass
 
+# Optional Google Colab Encrypted Secrets retrieval
+try:
+    from google.colab import userdata
+    _COLAB_WP_PASS = userdata.get('WP_APP_PASSWORD')
+    _COLAB_TMDB_KEY = userdata.get('TMDB_API_KEY')
+    _COLAB_DOOD_KEY = userdata.get('DOODSTREAM_API_KEY')
+except Exception:
+    _COLAB_WP_PASS = None
+    _COLAB_TMDB_KEY = None
+    _COLAB_DOOD_KEY = None
+
 # =============================================================================
 # ENVIRONMENT & CREDENTIALS CONFIGURATION
 # =============================================================================
 WP_SITE_URL = os.getenv("WP_SITE_URL", "https://dev-movio-stream.pantheonsite.io").rstrip("/")
 WP_USERNAME = os.getenv("WP_USERNAME", "admin")
-WP_APP_PASSWORD = os.getenv("WP_APP_PASSWORD", "")
+WP_APP_PASSWORD = os.getenv("WP_APP_PASSWORD") or _COLAB_WP_PASS or ""
 
-TMDB_API_KEY = os.getenv("TMDB_API_KEY", "")
-DOODSTREAM_API_KEY = os.getenv("DOODSTREAM_API_KEY", "")
+TMDB_API_KEY = os.getenv("TMDB_API_KEY") or _COLAB_TMDB_KEY or ""
+DOODSTREAM_API_KEY = os.getenv("DOODSTREAM_API_KEY") or _COLAB_DOOD_KEY or ""
 DOODSTREAM_API_BASE = "https://doodapi.com/api"
 
 DOWNLOAD_DIR = "/content/download" if os.path.exists("/content") else os.path.abspath("./downloads")
@@ -228,13 +243,36 @@ def fetch_yts_torrent(movie_title: str, release_year: str = None, imdb_id: str =
     }
 
 # =============================================================================
-# 3. HIGH-SPEED DOWNLOAD (ARIA2C)
+# 3. HIGH-SPEED DOWNLOAD (ARIA2C) & SANITIZATION
 # =============================================================================
+def sanitize_download_dir(download_dir: str = DOWNLOAD_DIR):
+    """
+    Sanitize download directory prior to calling aria2c:
+    Clear incomplete/stale .aria2 control files, partial downloads, and old chunks
+    to avoid CalledProcessError: exit status 13.
+    """
+    if not os.path.exists(download_dir):
+        os.makedirs(download_dir, exist_ok=True)
+        return
+
+    log("ARIA2", f"Sanitizing download directory: {download_dir}...")
+    stale_exts = (".aria2", ".part", ".tmp", ".crdownload")
+    for root, _, files in os.walk(download_dir):
+        for f in files:
+            if f.lower().endswith(stale_exts):
+                fpath = os.path.join(root, f)
+                try:
+                    os.remove(fpath)
+                    log("ARIA2", f"Cleared stale control/chunk file: {f}")
+                except Exception as e:
+                    log("ARIA2", f"Notice removing {f}: {e}")
+
 def download_with_aria2(torrent_source: str, download_dir: str = DOWNLOAD_DIR) -> str:
     """
     Execute optimized aria2c download inside the cloud/Colab environment.
+    Sanitizes download directory and applies robust flags to prevent duplicate/status 13 errors.
     """
-    os.makedirs(download_dir, exist_ok=True)
+    sanitize_download_dir(download_dir)
     log("ARIA2", f"Starting multi-connection download into {download_dir}...")
 
     cmd = [
@@ -246,6 +284,10 @@ def download_with_aria2(torrent_source: str, download_dir: str = DOWNLOAD_DIR) -
         "--summary-interval=10",
         "--seed-time=0",
         "--follow-torrent=mem",
+        "--allow-overwrite=true",
+        "--auto-file-renaming=false",
+        "--conditional-get=true",
+        "--file-allocation=none",
         torrent_source
     ]
     
@@ -271,46 +313,251 @@ def download_with_aria2(torrent_source: str, download_dir: str = DOWNLOAD_DIR) -
     return target_video
 
 # =============================================================================
-# 4. STREAMING HOST UPLOAD (DOODSTREAM API)
+# 4. AUTOMATED MULTI-LANGUAGE SUBTITLES & FAST MKV MUXING
 # =============================================================================
-def upload_to_doodstream(video_path: str, api_key: str = DOODSTREAM_API_KEY) -> str:
+def download_subtitles_for_imdb(imdb_id: str, output_dir: str = DOWNLOAD_DIR, target_languages: list = None) -> dict:
     """
-    Upload local video file to DoodStream API using chunked streaming
-    and return the live responsive embed player URL.
+    Fetch matching .srt subtitles for target languages (Arabic, English, French, Spanish)
+    via YIFY/IMDb subtitle API (https://api.yifysubtitles.ch/subs/{imdb_id}) with HTML scraping fallback.
     """
-    log("DOOD", "Requesting DoodStream upload server...")
-    srv_resp = requests.get(f"{DOODSTREAM_API_BASE}/upload/server", params={"key": api_key}, timeout=30).json()
-    if srv_resp.get("status") != 200:
-        raise RuntimeError(f"Failed to obtain DoodStream upload server: {srv_resp}")
+    if not imdb_id:
+        log("SUBS", "No IMDb ID available; skipping subtitle download.")
+        return {}
 
-    upload_url = srv_resp["result"]
+    if not target_languages:
+        target_languages = ["arabic", "english", "french", "spanish"]
+
+    subs_dir = os.path.join(output_dir, "subtitles")
+    os.makedirs(subs_dir, exist_ok=True)
+
+    lang_map = {
+        "arabic": "ara", "ar": "ara",
+        "english": "eng", "en": "eng",
+        "french": "fre", "fr": "fre",
+        "spanish": "spa", "es": "spa",
+    }
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    }
+
+    log("SUBS", f"Fetching subtitles for IMDb ID '{imdb_id}' in {target_languages}...")
+    subs_found = {}
+
+    # 1. Try JSON endpoint first
+    try:
+        api_url = f"https://api.yifysubtitles.ch/subs/{imdb_id}"
+        r = requests.get(api_url, headers=headers, timeout=6)
+        if r.status_code == 200:
+            data = r.json().get("subs", {}).get(imdb_id, {})
+            for lang in target_languages:
+                l_key = lang.lower()
+                if l_key in data and data[l_key]:
+                    best_sub = data[l_key][0]
+                    sub_url = best_sub.get("url", "")
+                    if sub_url:
+                        subs_found[l_key] = sub_url
+            if subs_found:
+                log("SUBS", f"Found subtitles via JSON API for: {list(subs_found.keys())}")
+    except Exception as e:
+        log("SUBS", f"JSON API notice: {e}")
+
+    # 2. Resilient fallback to HTML scraping across mirror domains
+    if len(subs_found) < len(target_languages):
+        mirrors = [
+            f"https://yifysubtitles.ch/movie-imdb/{imdb_id}",
+            f"https://yts-subs.com/movie-imdb/{imdb_id}",
+            f"https://yifysubtitles.org/movie-imdb/{imdb_id}"
+        ]
+        for mirror_url in mirrors:
+            try:
+                r = requests.get(mirror_url, headers=headers, timeout=10)
+                if r.status_code == 200:
+                    soup = BeautifulSoup(r.text, "html.parser")
+                    for tr in soup.find_all("tr"):
+                        lang_tag = tr.find(class_="sub-lang")
+                        if not lang_tag:
+                            continue
+                        lang_name = lang_tag.text.strip().lower()
+                        if lang_name in [t.lower() for t in target_languages] and lang_name not in subs_found:
+                            link = tr.find("a", href=True)
+                            if link and "/subtitles/" in link["href"]:
+                                subs_found[lang_name] = link["href"]
+                    if subs_found:
+                        break
+            except Exception:
+                continue
+
+    if not subs_found:
+        log("SUBS", f"No matching subtitles found for IMDb ID {imdb_id}.")
+        return {}
+
+    downloaded = {}
+    for lang, link_path in subs_found.items():
+        try:
+            slug = link_path.rstrip("/").split("/")[-1]
+            zip_url = f"https://yifysubtitles.ch/subtitle/{slug}.zip"
+            page_referer = f"https://yifysubtitles.ch/subtitles/{slug}"
+            req_headers = {
+                "User-Agent": headers["User-Agent"],
+                "Referer": page_referer
+            }
+            zr = requests.get(zip_url, headers=req_headers, timeout=15)
+            if zr.status_code == 200:
+                with zipfile.ZipFile(io.BytesIO(zr.content)) as z:
+                    for filename in z.namelist():
+                        if filename.lower().endswith(".srt"):
+                            code = lang_map.get(lang, lang[:3])
+                            out_srt = os.path.join(subs_dir, f"{imdb_id}_{code}.srt")
+                            with open(out_srt, "wb") as sf:
+                                sf.write(z.read(filename))
+                            downloaded[code] = out_srt
+                            log("SUBS", f"Successfully extracted {lang} ({code}) -> {os.path.basename(out_srt)}")
+                            break
+        except Exception as e:
+            log("SUBS", f"Failed downloading {lang} subtitle: {e}")
+
+    return downloaded
+
+def embed_subtitles_to_mkv(video_path: str, subtitles_dict: dict) -> str:
+    """
+    Fast muxing function using ffmpeg with stream copy mode (-c copy)
+    to package video, audio, and subtitle tracks into an .mkv container.
+    Attaches metadata for each subtitle stream: -metadata:s:s:{i} language={code} and title.
+    """
+    if not subtitles_dict:
+        log("MUX", "No subtitles to embed; continuing with original video.")
+        return video_path
+
+    ffmpeg_bin = shutil.which("ffmpeg")
+    if not ffmpeg_bin:
+        log("MUX", "ffmpeg not found in PATH; skipping MKV muxing.")
+        return video_path
+
+    base_name, _ = os.path.splitext(video_path)
+    output_mkv = f"{base_name}_subbed.mkv"
+    if os.path.abspath(output_mkv) == os.path.abspath(video_path):
+        output_mkv = f"{base_name}_muxed.mkv"
+
+    log("MUX", f"Packaging {len(subtitles_dict)} subtitle tracks into MKV: {os.path.basename(output_mkv)}...")
+
+    cmd = [ffmpeg_bin, "-y", "-i", video_path]
+    sub_keys = list(subtitles_dict.keys())
+    for lang in sub_keys:
+        cmd.extend(["-i", subtitles_dict[lang]])
+
+    # Map video and audio tracks from input 0
+    cmd.extend(["-map", "0:v", "-map", "0:a?"])
+
+    lang_titles = {
+        "ara": "Arabic",
+        "eng": "English",
+        "fre": "French",
+        "spa": "Spanish",
+    }
+
+    for idx, lang in enumerate(sub_keys):
+        sub_input_idx = idx + 1
+        cmd.extend(["-map", str(sub_input_idx)])
+        title = lang_titles.get(lang.lower(), lang.upper())
+        cmd.extend([
+            f"-metadata:s:s:{idx}", f"language={lang}",
+            f"-metadata:s:s:{idx}", f"title={title}",
+            f"-metadata:s:s:{idx}", f"handler_name={title}"
+        ])
+
+    # Fast stream copy: zero transcoding, ultra-fast execution
+    cmd.extend(["-c", "copy", output_mkv])
+
+    log("MUX", "Executing fast stream copy muxing with ffmpeg...")
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    if proc.returncode != 0:
+        log("MUX", f"ffmpeg muxing failed (exit {proc.returncode}): {proc.stderr[-300:]}")
+        log("MUX", "Falling back to original video file.")
+        return video_path
+
+    if os.path.exists(output_mkv) and os.path.getsize(output_mkv) > 0:
+        size_mb = os.path.getsize(output_mkv) / (1024 * 1024)
+        log("MUX", f"Muxing completed successfully! MKV Size: {size_mb:.2f} MB")
+        # Remove original file if different to conserve cloud disk space
+        if os.path.abspath(video_path) != os.path.abspath(output_mkv):
+            try:
+                os.remove(video_path)
+            except Exception:
+                pass
+        return output_mkv
+
+    return video_path
+
+# =============================================================================
+# 5. STREAMING HOST UPLOAD (DOODSTREAM API) WITH RESILIENCE & RETRIES
+# =============================================================================
+def upload_to_doodstream(video_path: str, api_key: str = DOODSTREAM_API_KEY, max_retries: int = 3) -> str:
+    """
+    Upload local video file to DoodStream API using chunked streaming.
+    Includes retry loop and requests a fresh server URL on disconnect/timeout.
+    """
+    if not api_key:
+        raise ValueError("DOODSTREAM_API_KEY is not set. Please provide a valid DoodStream API key.")
+
     filename = os.path.basename(video_path)
-    file_size_mb = os.path.getsize(video_path) / (1024 * 1024)
-    log("DOOD", f"Streaming '{filename}' ({file_size_mb:.1f} MB) to DoodStream...")
+    file_size_bytes = os.path.getsize(video_path)
+    file_size_mb = file_size_bytes / (1024 * 1024)
 
-    if HAS_TOOLBELT:
-        with open(video_path, 'rb') as f:
-            encoder = MultipartEncoder(fields={'api_key': api_key, 'file': (filename, f, 'video/mp4')})
-            last_pct = [-1]
-            def progress(monitor):
-                pct = int((monitor.bytes_read / monitor.len) * 100)
-                if pct % 10 == 0 and pct != last_pct[0]:
-                    last_pct[0] = pct
-                    print(f"  [DoodStream Progress] {pct}% ({monitor.bytes_read / (1024*1024):.1f} MB / {monitor.len / (1024*1024):.1f} MB)", flush=True)
-            monitor = MultipartEncoderMonitor(encoder, progress)
-            resp = requests.post(upload_url, data=monitor, headers={'Content-Type': monitor.content_type}, timeout=7200).json()
-    else:
-        with open(video_path, 'rb') as f:
-            resp = requests.post(upload_url, data={'api_key': api_key}, files={'file': (filename, f, 'video/mp4')}, timeout=7200).json()
+    last_error = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            log("DOOD", f"Requesting fresh DoodStream upload server (Attempt {attempt}/{max_retries})...")
+            srv_resp = requests.get(f"{DOODSTREAM_API_BASE}/upload/server", params={"key": api_key}, timeout=30).json()
+            if srv_resp.get("status") != 200 or not srv_resp.get("result"):
+                raise RuntimeError(f"Failed to obtain DoodStream upload server: {srv_resp}")
 
-    if resp.get("status") != 200:
-        raise RuntimeError(f"DoodStream upload failed: {resp}")
+            upload_url = srv_resp["result"]
+            log("DOOD", f"Assigned server: {upload_url[:50]}... Streaming '{filename}' ({file_size_mb:.1f} MB)...")
 
-    result = resp["result"]
-    file_code = result[0]["filecode"] if isinstance(result, list) else result.get("filecode")
-    embed_url = f"https://doodstream.com/e/{file_code}"
-    log("DOOD", f"Upload successful! File Code: {file_code} -> {embed_url}")
-    return embed_url
+            if HAS_TOOLBELT:
+                with open(video_path, 'rb') as f:
+                    encoder = MultipartEncoder(fields={'api_key': api_key, 'file': (filename, f, 'video/mp4')})
+                    last_pct = [-1]
+                    def progress(monitor):
+                        pct = int((monitor.bytes_read / monitor.len) * 100)
+                        if pct % 10 == 0 and pct != last_pct[0]:
+                            last_pct[0] = pct
+                            print(f"  [DoodStream Progress] {pct}% ({monitor.bytes_read / (1024*1024):.1f} MB / {monitor.len / (1024*1024):.1f} MB)", flush=True)
+                    monitor = MultipartEncoderMonitor(encoder, progress)
+                    resp = requests.post(
+                        upload_url,
+                        data=monitor,
+                        headers={'Content-Type': monitor.content_type},
+                        timeout=7200
+                    ).json()
+            else:
+                with open(video_path, 'rb') as f:
+                    resp = requests.post(
+                        upload_url,
+                        data={'api_key': api_key},
+                        files={'file': (filename, f, 'video/mp4')},
+                        timeout=7200
+                    ).json()
+
+            if resp.get("status") != 200:
+                raise RuntimeError(f"DoodStream upload rejected: {resp}")
+
+            result = resp["result"]
+            file_code = result[0]["filecode"] if isinstance(result, list) else result.get("filecode")
+            embed_url = f"https://doodstream.com/e/{file_code}"
+            log("DOOD", f"Upload successful! File Code: {file_code} -> {embed_url}")
+            return embed_url
+
+        except Exception as e:
+            last_error = e
+            log("DOOD", f"Upload attempt {attempt} encountered error: {e.__class__.__name__}: {e}")
+            if attempt < max_retries:
+                wait_time = attempt * 7
+                log("DOOD", f"Waiting {wait_time}s before allocating a fresh server and retrying...")
+                time.sleep(wait_time)
+
+    raise RuntimeError(f"DoodStream upload failed after {max_retries} attempts. Last error: {last_error}")
 
 # =============================================================================
 # 5. HEADLESS WORDPRESS PUBLISHING (PANTHEON REST API)
@@ -358,10 +605,10 @@ def publish_movie_to_pantheon(meta: dict, embed_url: str, quality: str = "1080p"
     title = f"{meta['title']} ({meta['year']})"
     log("WP", f"Publishing post to Pantheon: '{title}'...")
 
-    # Structured 16:9 Responsive Embed HTML
+    # Structured 16:9 Responsive Embed HTML (STRICT double quotes for Next.js regex parser)
     content = f"""
 <div class="video-container" style="position: relative; padding-bottom: 56.25%; height: 0; overflow: hidden; max-width: 100%; border-radius: 12px; margin-bottom: 1.5rem;">
-    <iframe src="{embed_url}" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: 0;" allowfullscreen scrolling="no"></iframe>
+    <iframe src="{embed_url}" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: 0;" allowfullscreen="true" scrolling="no" frameborder="0"></iframe>
 </div>
 
 <div class="movie-meta-summary">
@@ -380,6 +627,7 @@ def publish_movie_to_pantheon(meta: dict, embed_url: str, quality: str = "1080p"
         "status": "publish",
         "meta": {
             "embed_url": embed_url,
+            "dood_embed": embed_url,
             "video_year": str(meta.get("year", "2026")),
             "imdb_rating": str(meta.get("rating", "8.0")),
             "quality": quality,
@@ -414,41 +662,50 @@ def publish_movie_to_pantheon(meta: dict, embed_url: str, quality: str = "1080p"
 def run_pipeline(movie_title: str, release_year: str = None, imdb_id: str = None, preferred_quality: str = "1080p"):
     """
     End-to-End Execution:
-    TMDB -> YTS Torrent -> aria2c -> DoodStream -> Pantheon Headless WP
+    TMDB -> YTS Torrent -> aria2c (sanitized) -> Subtitles (Ara, Eng, Fre, Spa)
+    -> Fast MKV Muxing -> Resilient DoodStream Upload -> Pantheon Headless WP
     """
     print("=" * 75)
-    print("  MOVIO CLOUD AUTOMATION PIPELINE (TMDB + YTS + ARIA2C + PANTHEON)")
+    print("  MOVIO CLOUD AUTOMATION PIPELINE (TMDB + YTS + ARIA2C + SUBS + PANTHEON)")
     print("=" * 75)
 
     # 1. Fetch TMDB Metadata
     meta = fetch_tmdb_metadata(movie_title, release_year, imdb_id)
 
     # 2. Fetch YTS Torrent
-    torrent_info = fetch_yts_torrent(meta["title"], meta["year"], meta.get("imdb_id"), preferred_quality)
+    target_imdb = meta.get("imdb_id") or imdb_id
+    torrent_info = fetch_yts_torrent(meta["title"], meta["year"], target_imdb, preferred_quality)
 
-    # 3. High-Speed aria2c Download
+    # 3. High-Speed aria2c Download with Pre-Sanitization
     download_source = torrent_info["torrent_url"] or torrent_info["magnet_uri"]
-    video_path = download_with_aria2(download_source)
+    raw_video_path = download_with_aria2(download_source)
 
-    # 4. Upload to DoodStream
-    embed_url = upload_to_doodstream(video_path)
+    # 4. Multi-Language Subtitles & Fast MKV Muxing
+    subtitles = download_subtitles_for_imdb(target_imdb, DOWNLOAD_DIR)
+    final_video_path = embed_subtitles_to_mkv(raw_video_path, subtitles)
 
-    # 5. Publish to Pantheon WordPress
+    # 5. Upload to DoodStream with Retry & Server Re-allocation
+    embed_url = upload_to_doodstream(final_video_path)
+
+    # 6. Publish to Pantheon WordPress
     post_data = publish_movie_to_pantheon(meta, embed_url, torrent_info["quality"])
 
-    # 6. Cleanup downloaded video file to preserve cloud disk space
-    if os.path.exists(video_path):
-        try:
-            os.remove(video_path)
-            log("CLEANUP", f"Cleaned up {os.path.basename(video_path)}")
-        except Exception:
-            pass
+    # 7. Cleanup downloaded media & subtitle files to preserve cloud storage
+    cleanup_targets = set([final_video_path, raw_video_path] + list(subtitles.values()))
+    for path in cleanup_targets:
+        if path and os.path.exists(path):
+            try:
+                os.remove(path)
+                log("CLEANUP", f"Cleaned up {os.path.basename(path)}")
+            except Exception:
+                pass
 
     print("\n" + "=" * 75)
     print("  PIPELINE COMPLETED SUCCESSFULLY!")
     print(f"  Title:     {meta['title']} ({meta['year']})")
     print(f"  Rating:    ★ {meta['rating']}")
     print(f"  Embed:     {embed_url}")
+    print(f"  Subtitles: {list(subtitles.keys()) if subtitles else 'None'}")
     print(f"  Live Post: {post_data.get('link')}")
     print(f"  Next.js:   http://localhost:3000/movie/{post_data.get('slug')}")
     print("=" * 75)
