@@ -3,7 +3,8 @@ import FeaturedGrid from '../components/FeaturedGrid';
 import MovieCard from '../components/MovieCard';
 import styles from './page.module.css';
 
-export const revalidate = 60;
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
 
 export default async function Home() {
   const latestMovies = await getLatestMovies(18);
@@ -55,10 +56,10 @@ export default async function Home() {
 
         <div className={styles.grid}>
           {latestMovies.map((movie, index) => (
-            <MovieCard 
-              key={`latest-${movie.id}`} 
-              post={movie} 
-              quality={index % 2 === 0 ? 'WEB-DL' : '1080p'} 
+            <MovieCard
+              key={`latest-${movie.id}`}
+              post={movie}
+              quality={index % 2 === 0 ? 'WEB-DL' : '1080p'}
             />
           ))}
         </div>
