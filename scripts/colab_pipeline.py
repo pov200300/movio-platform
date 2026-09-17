@@ -419,75 +419,113 @@ def download_subtitles_for_imdb(imdb_id: str, output_dir: str = DOWNLOAD_DIR, ta
 
     return downloaded
 
-def embed_subtitles_to_mkv(video_path: str, subtitles_dict: dict) -> str:
+def convert_srt_to_vtt(srt_path: str) -> str:
     """
-    Fast muxing function using ffmpeg with stream copy mode (-c copy)
-    to package video, audio, and subtitle tracks into an .mkv container.
-    Attaches metadata for each subtitle stream: -metadata:s:s:{i} language={code} and title.
+    Convert an .srt subtitle file to WebVTT (.vtt) format.
+    Uses ffmpeg if available, with a fast Python regex fallback.
     """
-    if not subtitles_dict:
-        log("MUX", "No subtitles to embed; continuing with original video.")
-        return video_path
+    vtt_path = os.path.splitext(srt_path)[0] + ".vtt"
 
     ffmpeg_bin = shutil.which("ffmpeg")
-    if not ffmpeg_bin:
-        log("MUX", "ffmpeg not found in PATH; skipping MKV muxing.")
-        return video_path
+    if ffmpeg_bin:
+        cmd = [ffmpeg_bin, "-y", "-i", srt_path, vtt_path]
+        proc = subprocess.run(cmd, capture_output=True, text=True)
+        if proc.returncode == 0 and os.path.exists(vtt_path):
+            log("VTT", f"Converted via ffmpeg: {os.path.basename(vtt_path)}")
+            return vtt_path
 
-    base_name, _ = os.path.splitext(video_path)
-    output_mkv = f"{base_name}_subbed.mkv"
-    if os.path.abspath(output_mkv) == os.path.abspath(video_path):
-        output_mkv = f"{base_name}_muxed.mkv"
+    # Fast pure Python fallback: WEBVTT header and comma-to-dot timestamps
+    with open(srt_path, "r", encoding="utf-8", errors="ignore") as sf:
+        srt_content = sf.read()
 
-    log("MUX", f"Packaging {len(subtitles_dict)} subtitle tracks into MKV: {os.path.basename(output_mkv)}...")
+    vtt_content = "WEBVTT\n\n" + re.sub(
+        r"(\d{2}:\d{2}:\d{2}),(\d{3})",
+        r"\1.\2",
+        srt_content
+    )
+    with open(vtt_path, "w", encoding="utf-8") as vf:
+        vf.write(vtt_content)
 
-    cmd = [ffmpeg_bin, "-y", "-i", video_path]
-    sub_keys = list(subtitles_dict.keys())
-    for lang in sub_keys:
-        cmd.extend(["-i", subtitles_dict[lang]])
+    log("VTT", f"Converted via regex engine: {os.path.basename(vtt_path)}")
+    return vtt_path
 
-    # Map video and audio tracks from input 0
-    cmd.extend(["-map", "0:v", "-map", "0:a?"])
+def upload_subtitle_to_pantheon(vtt_path: str, wp_site_url: str = WP_SITE_URL, username: str = WP_USERNAME, app_password: str = WP_APP_PASSWORD) -> str:
+    """
+    Upload a .vtt subtitle file to WordPress REST API (/wp-json/wp/v2/media)
+    using Content-Type: text/vtt and HTTP Basic Auth.
+    Returns the public source_url of the uploaded subtitle.
+    """
+    if not os.path.exists(vtt_path):
+        log("WP", f"Subtitle file not found: {vtt_path}")
+        return None
 
-    lang_titles = {
-        "ara": "Arabic",
-        "eng": "English",
-        "fre": "French",
-        "spa": "Spanish",
+    filename = os.path.basename(vtt_path)
+    api_endpoint = f"{wp_site_url}/wp-json/wp/v2/media"
+    upload_headers = {
+        "Content-Disposition": f'attachment; filename="{filename}"',
+        "Content-Type": "text/vtt",
+        "User-Agent": HEADERS["User-Agent"]
+    }
+    auth = HTTPBasicAuth(username, app_password) if app_password else None
+
+    log("WP", f"Uploading subtitle to WordPress Media: {filename}...")
+    with open(vtt_path, "rb") as f:
+        file_data = f.read()
+
+    try:
+        res = requests.post(api_endpoint, headers=upload_headers, data=file_data, auth=auth, timeout=35)
+        if res.status_code in (200, 201):
+            data = res.json()
+            source_url = data.get("source_url") or data.get("guid", {}).get("rendered")
+            log("WP", f"Subtitle uploaded! Public URL: {source_url}")
+            return source_url
+        else:
+            log("WP", f"Subtitle upload notice ({res.status_code}): {res.text[:150]}")
+            return None
+    except Exception as e:
+        log("WP", f"Subtitle upload error: {e}")
+        return None
+
+def build_dood_embed_with_subs(embed_url: str, subtitles_map: dict) -> str:
+    """
+    Construct enriched DoodStream embed URL with official remote subtitles parameters:
+    ?c1_file={url}&c1_label={label}&c2_file={url}&c2_label={label}...
+    Mapping language codes to readable labels:
+    ara -> Arabic, eng -> English, fre -> French, spa -> Spanish.
+    """
+    if not subtitles_map:
+        return embed_url
+
+    lang_labels = {
+        "ara": "Arabic", "ar": "Arabic",
+        "eng": "English", "en": "English",
+        "fre": "French", "fra": "French", "fr": "French",
+        "spa": "Spanish", "es": "Spanish"
     }
 
-    for idx, lang in enumerate(sub_keys):
-        sub_input_idx = idx + 1
-        cmd.extend(["-map", str(sub_input_idx)])
-        title = lang_titles.get(lang.lower(), lang.upper())
-        cmd.extend([
-            f"-metadata:s:s:{idx}", f"language={lang}",
-            f"-metadata:s:s:{idx}", f"title={title}",
-            f"-metadata:s:s:{idx}", f"handler_name={title}"
-        ])
+    params = []
+    idx = 1
+    order_preference = ["ara", "ar", "eng", "en", "fre", "fr", "spa", "es"]
+    sorted_keys = sorted(
+        subtitles_map.keys(),
+        key=lambda k: order_preference.index(k) if k in order_preference else 99
+    )
 
-    # Fast stream copy: zero transcoding, ultra-fast execution
-    cmd.extend(["-c", "copy", output_mkv])
+    for code in sorted_keys:
+        url = subtitles_map[code]
+        if not url:
+            continue
+        label = lang_labels.get(code.lower(), code.capitalize())
+        params.append(f"c{idx}_file={quote(url, safe=':/?=')}&c{idx}_label={quote(label)}")
+        idx += 1
 
-    log("MUX", "Executing fast stream copy muxing with ffmpeg...")
-    proc = subprocess.run(cmd, capture_output=True, text=True)
-    if proc.returncode != 0:
-        log("MUX", f"ffmpeg muxing failed (exit {proc.returncode}): {proc.stderr[-300:]}")
-        log("MUX", "Falling back to original video file.")
-        return video_path
+    if not params:
+        return embed_url
 
-    if os.path.exists(output_mkv) and os.path.getsize(output_mkv) > 0:
-        size_mb = os.path.getsize(output_mkv) / (1024 * 1024)
-        log("MUX", f"Muxing completed successfully! MKV Size: {size_mb:.2f} MB")
-        # Remove original file if different to conserve cloud disk space
-        if os.path.abspath(video_path) != os.path.abspath(output_mkv):
-            try:
-                os.remove(video_path)
-            except Exception:
-                pass
-        return output_mkv
-
-    return video_path
+    delimiter = "&" if "?" in embed_url else "?"
+    enriched_url = f"{embed_url}{delimiter}{'&'.join(params)}"
+    log("DOOD", f"Enriched Embed URL with {len(params)} remote subtitles")
+    return enriched_url
 
 # =============================================================================
 # 5. STREAMING HOST UPLOAD (DOODSTREAM API) WITH RESILIENCE & RETRIES
@@ -662,11 +700,12 @@ def publish_movie_to_pantheon(meta: dict, embed_url: str, quality: str = "1080p"
 def run_pipeline(movie_title: str, release_year: str = None, imdb_id: str = None, preferred_quality: str = "1080p"):
     """
     End-to-End Execution:
-    TMDB -> YTS Torrent -> aria2c (sanitized) -> Subtitles (Ara, Eng, Fre, Spa)
-    -> Fast MKV Muxing -> Resilient DoodStream Upload -> Pantheon Headless WP
+    TMDB -> YTS Torrent -> aria2c (clean .mp4) -> DoodStream Upload
+    -> Multi-Language Subtitles (.srt -> .vtt -> WordPress Media)
+    -> Enriched Embed URL (?c1_file=...&c1_label=...) -> Pantheon Headless WP
     """
     print("=" * 75)
-    print("  MOVIO CLOUD AUTOMATION PIPELINE (TMDB + YTS + ARIA2C + SUBS + PANTHEON)")
+    print("  MOVIO CLOUD AUTOMATION PIPELINE (TMDB + YTS + ARIA2C + REMOTE VTT + PANTHEON)")
     print("=" * 75)
 
     # 1. Fetch TMDB Metadata
@@ -676,22 +715,33 @@ def run_pipeline(movie_title: str, release_year: str = None, imdb_id: str = None
     target_imdb = meta.get("imdb_id") or imdb_id
     torrent_info = fetch_yts_torrent(meta["title"], meta["year"], target_imdb, preferred_quality)
 
-    # 3. High-Speed aria2c Download with Pre-Sanitization
+    # 3. High-Speed aria2c Download with Pre-Sanitization (Maintains clean .mp4)
     download_source = torrent_info["torrent_url"] or torrent_info["magnet_uri"]
-    raw_video_path = download_with_aria2(download_source)
+    video_path = download_with_aria2(download_source)
 
-    # 4. Multi-Language Subtitles & Fast MKV Muxing
-    subtitles = download_subtitles_for_imdb(target_imdb, DOWNLOAD_DIR)
-    final_video_path = embed_subtitles_to_mkv(raw_video_path, subtitles)
+    # 4. Upload native video to DoodStream with Retry & Server Re-allocation
+    raw_embed_url = upload_to_doodstream(video_path)
 
-    # 5. Upload to DoodStream with Retry & Server Re-allocation
-    embed_url = upload_to_doodstream(final_video_path)
+    # 5. Automated Subtitles: Fetch .srt, convert to .vtt, and upload to WordPress Media
+    subtitles_srt = download_subtitles_for_imdb(target_imdb, DOWNLOAD_DIR)
+    vtt_map = {}
+    temp_vtt_files = []
 
-    # 6. Publish to Pantheon WordPress
-    post_data = publish_movie_to_pantheon(meta, embed_url, torrent_info["quality"])
+    for lang_code, srt_path in subtitles_srt.items():
+        vtt_path = convert_srt_to_vtt(srt_path)
+        temp_vtt_files.append(vtt_path)
+        remote_vtt_url = upload_subtitle_to_pantheon(vtt_path)
+        if remote_vtt_url:
+            vtt_map[lang_code] = remote_vtt_url
 
-    # 7. Cleanup downloaded media & subtitle files to preserve cloud storage
-    cleanup_targets = set([final_video_path, raw_video_path] + list(subtitles.values()))
+    # 6. Build Enriched DoodStream Embed URL with Official Remote Subtitles
+    enriched_embed_url = build_dood_embed_with_subs(raw_embed_url, vtt_map)
+
+    # 7. Publish to Pantheon WordPress (Strict Double-Quoted iframe)
+    post_data = publish_movie_to_pantheon(meta, enriched_embed_url, torrent_info["quality"])
+
+    # 8. Cleanup downloaded video file and temporary subtitle files (.srt & .vtt)
+    cleanup_targets = set([video_path] + list(subtitles_srt.values()) + temp_vtt_files)
     for path in cleanup_targets:
         if path and os.path.exists(path):
             try:
@@ -704,8 +754,9 @@ def run_pipeline(movie_title: str, release_year: str = None, imdb_id: str = None
     print("  PIPELINE COMPLETED SUCCESSFULLY!")
     print(f"  Title:     {meta['title']} ({meta['year']})")
     print(f"  Rating:    ★ {meta['rating']}")
-    print(f"  Embed:     {embed_url}")
-    print(f"  Subtitles: {list(subtitles.keys()) if subtitles else 'None'}")
+    print(f"  Raw Embed: {raw_embed_url}")
+    print(f"  Final URL: {enriched_embed_url}")
+    print(f"  Subtitles: {list(vtt_map.keys()) if vtt_map else 'None'}")
     print(f"  Live Post: {post_data.get('link')}")
     print(f"  Next.js:   http://localhost:3000/movie/{post_data.get('slug')}")
     print("=" * 75)
