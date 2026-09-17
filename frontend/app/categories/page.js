@@ -2,7 +2,8 @@ import Link from 'next/link';
 import { getCategories } from '../../lib/api';
 import styles from './categories.module.css';
 
-export const revalidate = 60;
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
 
 export const metadata = {
   title: 'All Categories | CineVault',

@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 900" width="100%" height="100%">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f172a" />
+      <stop offset="100%" stop-color="#1e293b" />
+    </linearGradient>
+  </defs>
+  <rect width="600" height="900" fill="url(#bg)" />
+  <rect x="100" y="250" width="400" height="400" rx="16" fill="none" stroke="#334155" stroke-width="3" />
+  <circle cx="300" cy="450" r="45" fill="#e50914" />
+  <polygon points="290,430 290,470 325,450" fill="#ffffff" />
+  <text x="300" y="540" fill="#f8fafc" font-size="22" font-weight="bold" font-family="sans-serif" text-anchor="middle">MOVIO STREAM</text>
+  <text x="300" y="580" fill="#94a3b8" font-size="14" font-family="sans-serif" text-anchor="middle">POSTER COMING SOON</text>
+</svg>

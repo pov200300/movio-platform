@@ -28,6 +28,13 @@ try:
 except ImportError:
     HAS_TOOLBELT = False
 
+# Load local .env if available (ignored by git)
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 # =============================================================================
 # ENVIRONMENT & CREDENTIALS CONFIGURATION
 # =============================================================================
@@ -35,8 +42,8 @@ WP_SITE_URL = os.getenv("WP_SITE_URL", "https://dev-movio-stream.pantheonsite.io
 WP_USERNAME = os.getenv("WP_USERNAME", "admin")
 WP_APP_PASSWORD = os.getenv("WP_APP_PASSWORD", "")
 
-TMDB_API_KEY = os.getenv("TMDB_API_KEY", "b35f606354897f26c58be0343a41e97a")
-DOODSTREAM_API_KEY = os.getenv("DOODSTREAM_API_KEY", "578084xvwvf2mt7is4dgrb")
+TMDB_API_KEY = os.getenv("TMDB_API_KEY", "")
+DOODSTREAM_API_KEY = os.getenv("DOODSTREAM_API_KEY", "")
 DOODSTREAM_API_BASE = "https://doodapi.com/api"
 
 DOWNLOAD_DIR = "/content/download" if os.path.exists("/content") else os.path.abspath("./downloads")

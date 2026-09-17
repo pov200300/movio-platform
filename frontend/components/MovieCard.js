@@ -1,27 +1,21 @@
 import Link from 'next/link';
 import Image from 'next/image';
 import styles from './MovieCard.module.css';
+import { parseMovieData } from '../lib/api';
 
-export default function MovieCard({ post, quality = 'WEB-DL' }) {
-  if (!post) return null;
+export default function MovieCard({ post, quality }) {
+  const movie = parseMovieData(post);
+  if (!movie) return null;
 
-  const title = post.title?.rendered || 'عنوان الفيلم';
-  const slug = post.slug || '';
-  const year = post.meta?.video_year || '2026';
-  const rating = post.meta?.imdb_rating || '8.5';
-  
-  let imageUrl = '/placeholder.jpg';
-  if (post._embedded && post._embedded['wp:featuredmedia']) {
-    imageUrl = post._embedded['wp:featuredmedia'][0].source_url;
-  }
+  const displayQuality = quality || movie.quality || '1080p';
 
   return (
-    <Link href={`/movie/${slug}`} className={styles.cardLink}>
+    <Link href={`/movie/${movie.slug}`} className={styles.cardLink}>
       <div className={styles.card}>
         <div className={styles.posterWrapper}>
           <Image
-            src={imageUrl}
-            alt={title}
+            src={movie.posterUrl}
+            alt={movie.rawTitle}
             fill
             sizes="(max-width: 640px) 33vw, (max-width: 1024px) 25vw, 14vw"
             className={styles.posterImage}
@@ -32,12 +26,12 @@ export default function MovieCard({ post, quality = 'WEB-DL' }) {
 
           {/* Top Right: Quality Badge */}
           <div className={styles.badgeTopRight}>
-            <span className={styles.badgeQuality}>{quality}</span>
+            <span className={styles.badgeQuality}>{displayQuality}</span>
           </div>
           
           {/* Top Left: IMDB Rating */}
           <div className={styles.badgeTopLeft}>
-            <span className={styles.badgeRating}>★ {rating}</span>
+            <span className={styles.badgeRating}>★ {movie.rating}</span>
           </div>
 
           {/* Play Icon Glow */}
@@ -53,7 +47,7 @@ export default function MovieCard({ post, quality = 'WEB-DL' }) {
           <div className={styles.cardTitleBox}>
             <div className={styles.subBadge}>مترجم</div>
             <h3 className={styles.cardTitle}>
-              مشاهدة فيلم <span dangerouslySetInnerHTML={{ __html: title }} /> {year}
+              مشاهدة فيلم <span dangerouslySetInnerHTML={{ __html: movie.displayTitle }} /> ({movie.year})
             </h3>
           </div>
         </div>

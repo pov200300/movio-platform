@@ -2,7 +2,8 @@ import { getLatestMovies, fetchAPI } from '../../../lib/api';
 import MovieCard from '../../../components/MovieCard';
 import styles from './category.module.css';
 
-export const revalidate = 60;
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
 
 // Dynamic metadata
 export async function generateMetadata({ params }) {

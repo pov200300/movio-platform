@@ -1,7 +1,6 @@
-// Base URL for WordPress REST API (supports standard /wp-json/wp/v2 or index.php?rest_route=/wp/v2)
+// Base URL for WordPress REST API (Pantheon Headless CMS)
 const WP_API_URL = (
   process.env.NEXT_PUBLIC_WORDPRESS_API_URL ||
-  process.env.WORDPRESS_INTERNAL_URL ||
   'https://dev-movio-stream.pantheonsite.io/wp-json/wp/v2'
 ).replace(/\/+$/, '');
 
@@ -18,13 +17,13 @@ function buildApiUrl(endpoint) {
 }
 
 /**
- * Fetch generic data from WordPress REST API
+ * Fetch generic data from WordPress REST API with zero-caching for real-time live data
  */
 export async function fetchAPI(endpoint, { method = 'GET', body = null } = {}) {
   const headers = {
     'Content-Type': 'application/json',
     'Accept': 'application/json',
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
   };
 
   const url = buildApiUrl(endpoint);
@@ -32,16 +31,13 @@ export async function fetchAPI(endpoint, { method = 'GET', body = null } = {}) {
   const options = {
     method,
     headers,
-    // Use Next.js Incremental Static Regeneration (ISR) revalidation
-    next: { revalidate: 60 },
-    // Prevent build hangs if backend host is unreachable
-    signal: AbortSignal.timeout(5000),
+    // Real-time live data fetching: prevent build-time caching and stale post locks
+    cache: 'no-store',
+    signal: AbortSignal.timeout(8000),
   };
 
   if (body) {
     options.body = JSON.stringify(body);
-    delete options.next;
-    options.cache = 'no-store';
   }
 
   try {
@@ -59,9 +55,21 @@ export async function fetchAPI(endpoint, { method = 'GET', body = null } = {}) {
 /**
  * Fetch latest movies (posts)
  */
-export async function getLatestMovies(limit = 10) {
+export async function getLatestMovies(limit = 18) {
   const posts = await fetchAPI(`posts?per_page=${limit}&_embed`);
-  return posts;
+  return Array.isArray(posts) ? posts : [];
+}
+
+/**
+ * Search or filter movies from WordPress
+ */
+export async function searchMovies({ search = '', perPage = 50 } = {}) {
+  let endpoint = `posts?per_page=${perPage}&_embed`;
+  if (search && search.trim()) {
+    endpoint += `&search=${encodeURIComponent(search.trim())}`;
+  }
+  const posts = await fetchAPI(endpoint);
+  return Array.isArray(posts) ? posts : [];
 }
 
 /**
@@ -69,14 +77,15 @@ export async function getLatestMovies(limit = 10) {
  */
 export async function getMovieBySlug(slug) {
   const posts = await fetchAPI(`posts?slug=${slug}&_embed`);
-  return posts && posts.length > 0 ? posts[0] : null;
+  return Array.isArray(posts) && posts.length > 0 ? posts[0] : null;
 }
 
 /**
  * Fetch all categories
  */
 export async function getCategories() {
-  return await fetchAPI('categories?hide_empty=true');
+  const cats = await fetchAPI('categories?hide_empty=true');
+  return Array.isArray(cats) ? cats : [];
 }
 
 /**
@@ -104,5 +113,76 @@ export function getMovieEmbedUrl(post) {
   if (iframeMatch) return iframeMatch[1];
 
   return null;
+}
+
+/**
+ * Parse all movie attributes with deep fallbacks across meta, title, and HTML content
+ */
+export function parseMovieData(post) {
+  if (!post) return null;
+
+  const rawTitle = post.title?.rendered || 'Movie';
+  
+  // Extract year from title if present, e.g. "The Beekeeper (2024)"
+  const titleYearMatch = rawTitle.match(/\((\d{4})\)/);
+  const titleExtractedYear = titleYearMatch ? titleYearMatch[1] : null;
+  const cleanTitle = rawTitle.replace(/\s*\(\d{4}\)\s*/g, '').trim();
+
+  const content = post.content?.rendered || '';
+
+  // 1. Release Year
+  let year = post.meta?.video_year;
+  if (!year && titleExtractedYear) {
+    year = titleExtractedYear;
+  }
+  if (!year) {
+    const yearMatch = content.match(/<strong>Release Year:<\/strong>\s*(\d{4})/i) || content.match(/\b(19\d\d|20\d\d)\b/);
+    if (yearMatch) year = yearMatch[1];
+  }
+  if (!year) year = new Date().getFullYear().toString();
+
+  // 2. Rating
+  let rating = post.meta?.imdb_rating;
+  if (!rating) {
+    const ratingMatch = content.match(/<strong>Rating:<\/strong>\s*([0-9.]+)/i) || content.match(/★\s*([0-9.]+)/);
+    if (ratingMatch) rating = ratingMatch[1];
+  }
+  if (!rating) rating = '8.0';
+
+  // 3. Quality Badge
+  let quality = post.meta?.quality;
+  if (!quality) {
+    const qualityMatch = content.match(/<strong>Quality:<\/strong>\s*([^<\n]+)/i);
+    if (qualityMatch) quality = qualityMatch[1].trim();
+  }
+  if (!quality) quality = '1080p Full HD';
+
+  // 4. Embed URL
+  const embedUrl = getMovieEmbedUrl(post);
+
+  // 5. Poster Image
+  const posterUrl = getFeaturedImage(post);
+
+  // 6. Synopsis
+  let synopsis = post.excerpt?.rendered || content;
+  synopsis = synopsis
+    .replace(/<div class="video-container".*?<\/div>/gis, '')
+    .replace(/<iframe.*?<\/iframe>/gis, '')
+    .trim();
+
+  return {
+    id: post.id,
+    slug: post.slug,
+    rawTitle,
+    cleanTitle,
+    displayTitle: cleanTitle || rawTitle,
+    year,
+    rating,
+    quality,
+    embedUrl,
+    posterUrl,
+    synopsis,
+    categories: post.categories || [],
+  };
 }
 

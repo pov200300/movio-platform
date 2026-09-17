@@ -1,15 +1,54 @@
+# Environment variables & secrets
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+.env.*.local
+frontend/.env
+frontend/.env.local
+frontend/.env.development.local
+frontend/.env.test.local
+frontend/.env.production.local
+frontend/.env.*.local
+*.env
+*.env.local
+!.env.example
+!frontend/.env.example
+
+# Dependencies
 node_modules/
 frontend/node_modules/
+
+# Next.js build output
 .next/
 frontend/.next/
 out/
 frontend/out/
-.env
-.env.local
-frontend/.env
-frontend/.env.local
+
+# Python & Caches
 __pycache__/
 *.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+
+# Local media, downloads & torrents
+downloads/
+download/
+/content/
 *.mp4
 *.mkv
 *.avi
+*.webm
+*.torrent
+*.part
+*.aria2
+
+# System & IDE files
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.vscode/
+.idea/
