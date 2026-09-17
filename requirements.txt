@@ -1,34 +1,7 @@
-# Automated Legal Media Platform — Python Dependencies
-# Install: pip install -r requirements.txt
-
-# Core HTTP & API
+# Movio Platform Automation Pipeline — Dependencies
 requests>=2.31.0
-urllib3>=2.0.0
-
-# Database ORM
-SQLAlchemy>=2.0.0
-
-# RSS/Atom Feed Parsing
-feedparser>=6.0.0
-
-# System Monitoring (CPU-adaptive transcoding)
-psutil>=5.9.0
-
-# Scheduling (alternative to cron for complex flows)
-schedule>=1.2.0
-
-# Environment Variable Management
+requests-toolbelt>=1.0.0
 python-dotenv>=1.0.0
-
-# Logging (structured JSON logs)
-python-json-logger>=2.0.0
-
-# HTML Parsing (for metadata extraction)
 beautifulsoup4>=4.12.0
-lxml>=4.9.0
-
-# CLI Colors (for status output)
-colorama>=0.4.6
-
-# Image handling (poster downloads)
-Pillow>=10.0.0
+tqdm>=4.66.0
+aria2p>=0.11.0

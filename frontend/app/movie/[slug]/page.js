@@ -1,4 +1,4 @@
-import { getMovieBySlug } from '../../../lib/api';
+import { getMovieBySlug, getFeaturedImage, getMovieEmbedUrl } from '../../../lib/api';
 import VideoPlayer from '../../../components/VideoPlayer';
 import Image from 'next/image';
 import styles from './movie.module.css';
@@ -24,12 +24,13 @@ export default async function MoviePage({ params }) {
   }
 
   const titleHtml = movie.title.rendered;
-  const contentStr = movie.content.rendered;
+  const contentStr = movie.content?.rendered || '';
   
+  // Extract Embed URL & HTML
+  const embedUrl = getMovieEmbedUrl(movie);
   let embedHtml = '';
-  const iframeMatch = contentStr.match(/<iframe.*?src=".*?doodstream.*?<\/iframe>/i);
-  if (iframeMatch) {
-    embedHtml = iframeMatch[0];
+  if (embedUrl) {
+    embedHtml = `<iframe src="${embedUrl}" width="100%" height="100%" frameborder="0" allowfullscreen scrolling="no"></iframe>`;
   } else {
     const genericIframe = contentStr.match(/<iframe.*?<\/iframe>/i);
     if (genericIframe) embedHtml = genericIframe[0];
@@ -37,11 +38,8 @@ export default async function MoviePage({ params }) {
 
   const year = movie.meta?.video_year || '2026';
   const rating = movie.meta?.imdb_rating || '8.5';
-  
-  let posterUrl = '/placeholder.jpg';
-  if (movie._embedded && movie._embedded['wp:featuredmedia']) {
-    posterUrl = movie._embedded['wp:featuredmedia'][0].source_url;
-  }
+  const quality = movie.meta?.quality || 'WEB-DL 1080p';
+  const posterUrl = getFeaturedImage(movie);
 
   let synopsis = movie.excerpt?.rendered || movie.content?.rendered || '';
   synopsis = synopsis.replace(/<iframe.*?<\/iframe>/gi, '').trim();
@@ -60,7 +58,7 @@ export default async function MoviePage({ params }) {
               sizes="220px"
               className={styles.posterImg} 
             />
-            <span className={styles.qualityTag}>WEB-DL 1080p</span>
+            <span className={styles.qualityTag}>{quality}</span>
           </div>
 
           <div className={styles.infoBox}>
@@ -72,7 +70,7 @@ export default async function MoviePage({ params }) {
               <span className={styles.tagRating}>★ {rating} IMDB</span>
               <span className={styles.tagPill}>مترجم للعربية</span>
               <span className={styles.tagPill}>{year}</span>
-              <span className={styles.tagPillRed}>1080p Full HD</span>
+              <span className={styles.tagPillRed}>{quality}</span>
               <span className={styles.tagPillGreen}>سيرفر مباشر</span>
             </div>
 
@@ -94,19 +92,8 @@ export default async function MoviePage({ params }) {
 
         {/* Video Player Box with Multi-Server Tabs */}
         <div id="player" className={styles.playerContainer}>
-          <div className={styles.serverTabs}>
-            <button className={`${styles.serverTab} ${styles.activeTab}`}>
-              🔴 سيرفر 1 (Doodstream Fast)
-            </button>
-            <button className={styles.serverTab}>
-              ⚡ سيرفر 2 (CDN Mirror)
-            </button>
-            <button className={styles.serverTab}>
-              💾 سيرفر 3 (Direct Download)
-            </button>
-          </div>
-
           <VideoPlayer 
+            embedUrl={embedUrl}
             embedHtml={embedHtml} 
             posterUrl={posterUrl} 
             title={titleHtml} 

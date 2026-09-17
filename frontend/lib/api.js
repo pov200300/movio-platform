@@ -2,7 +2,7 @@
 const WP_API_URL = (
   process.env.NEXT_PUBLIC_WORDPRESS_API_URL ||
   process.env.WORDPRESS_INTERNAL_URL ||
-  'http://localhost:8080/wp-json/wp/v2'
+  'https://dev-movio-stream.pantheonsite.io/wp-json/wp/v2'
 ).replace(/\/+$/, '');
 
 /**
@@ -80,11 +80,29 @@ export async function getCategories() {
 }
 
 /**
- * Extract featured image URL from an embedded WP post object
+ * Extract featured image URL from an embedded WP post object or fallback
  */
 export function getFeaturedImage(post) {
-  if (post._embedded && post._embedded['wp:featuredmedia']) {
+  if (!post) return '/placeholder.jpg';
+  if (post._embedded && post._embedded['wp:featuredmedia'] && post._embedded['wp:featuredmedia'][0]?.source_url) {
     return post._embedded['wp:featuredmedia'][0].source_url;
   }
+  if (post.meta?.backdrop_url) return post.meta.backdrop_url;
+  return '/placeholder.jpg';
+}
+
+/**
+ * Extract streaming embed URL from post meta or content
+ */
+export function getMovieEmbedUrl(post) {
+  if (!post) return null;
+  if (post.meta?.embed_url) return post.meta.embed_url;
+  if (post.meta?.dood_embed) return post.meta.dood_embed;
+
+  const contentStr = post.content?.rendered || '';
+  const iframeMatch = contentStr.match(/<iframe.*?src="([^"]+)".*?<\/iframe>/i);
+  if (iframeMatch) return iframeMatch[1];
+
   return null;
 }
+

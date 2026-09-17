@@ -1,3 +1,37 @@
+.playerSection {
+  width: 100%;
+}
+
+.serverTabs {
+  display: flex;
+  gap: 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  padding-bottom: 1rem;
+  margin-bottom: 1.25rem;
+  overflow-x: auto;
+}
+
+.serverTab {
+  background: #090d16;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: #cbd5e1;
+  font-family: inherit;
+  font-size: 0.88rem;
+  font-weight: 700;
+  padding: 8px 16px;
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.2s ease;
+}
+
+.activeTab,
+.serverTab:hover {
+  background: #e50914;
+  border-color: #e50914;
+  color: #ffffff;
+}
+
 .playerContainer {
   position: relative;
   width: 100%;
