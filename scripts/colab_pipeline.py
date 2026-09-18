@@ -318,6 +318,7 @@ def download_with_aria2(torrent_source: str, download_dir: str = DOWNLOAD_DIR) -
 def download_subtitles_for_imdb(imdb_id: str, output_dir: str = DOWNLOAD_DIR) -> str:
     """
     Search and download ONLY the highest-rated Arabic (.srt) subtitle file.
+    Validates content with Unicode regex [\u0600-\u06FF].
     Returns the local path to the .srt file if successful, or None if not found or failed.
     """
     if not imdb_id:
@@ -362,10 +363,17 @@ def download_subtitles_for_imdb(imdb_id: str, output_dir: str = DOWNLOAD_DIR) ->
                 if r.status_code == 200:
                     soup = BeautifulSoup(r.text, "html.parser")
                     for tr in soup.find_all("tr"):
+                        lang_text = ""
                         lang_tag = tr.find(class_="sub-lang")
-                        if not lang_tag:
-                            continue
-                        if lang_tag.text.strip().lower() == "arabic":
+                        if lang_tag:
+                            lang_text = lang_tag.text.strip().lower()
+                        else:
+                            for td in tr.find_all("td"):
+                                if "arabic" in td.text.strip().lower():
+                                    lang_text = "arabic"
+                                    break
+                        # Strictly match Arabic rows - NEVER fall back to top/first row
+                        if lang_text == "arabic" or "arabic" in lang_text:
                             link = tr.find("a", href=True)
                             if link and "/subtitles/" in link["href"]:
                                 arabic_sub_url = link["href"]
@@ -392,13 +400,55 @@ def download_subtitles_for_imdb(imdb_id: str, output_dir: str = DOWNLOAD_DIR) ->
         zr = requests.get(zip_url, headers=req_headers, timeout=15)
         if zr.status_code == 200:
             with zipfile.ZipFile(io.BytesIO(zr.content)) as z:
-                for filename in z.namelist():
-                    if filename.lower().endswith(".srt"):
-                        out_srt = os.path.join(subs_dir, f"{imdb_id}_ara.srt")
-                        with open(out_srt, "wb") as sf:
-                            sf.write(z.read(filename))
-                        log("SUBS", f"Extracted Arabic subtitle -> {os.path.basename(out_srt)}")
-                        return out_srt
+                srt_files = [f for f in z.namelist() if f.lower().endswith(".srt") and not f.startswith("__MACOSX")]
+                if not srt_files:
+                    log("SUBS", f"No .srt files found in archive for {imdb_id}.")
+                    return None
+
+                target_filename = None
+                # Prioritize .srt files matching *ara* or *arabic* in their filename
+                for fname in srt_files:
+                    base_lower = os.path.basename(fname).lower()
+                    if "arabic" in base_lower or "ara" in base_lower:
+                        target_filename = fname
+                        break
+
+                # If filenames are generic, inspect files to extract the one containing Arabic characters
+                if not target_filename:
+                    for fname in srt_files:
+                        try:
+                            content_sample = z.read(fname)[:50000].decode("utf-8", errors="ignore")
+                            if re.search(r'[\u0600-\u06FF]', content_sample):
+                                target_filename = fname
+                                break
+                        except Exception:
+                            continue
+
+                if not target_filename:
+                    log("SUBS", f"None of the subtitle files in {slug}.zip contain Arabic characters. Rejecting.")
+                    return None
+
+                out_srt = os.path.join(subs_dir, f"{imdb_id}_ara.srt")
+                with open(out_srt, "wb") as sf:
+                    sf.write(z.read(target_filename))
+
+                # 4. Arabic Content Sanity Check (Unicode Regex)
+                try:
+                    with open(out_srt, 'r', encoding='utf-8', errors='ignore') as f:
+                        sample_text = f.read(50000)
+                    if not re.search(r'[\u0600-\u06FF]', sample_text):
+                        log("SUBS", f"❌ Subtitle file '{out_srt}' does NOT contain Arabic characters! Rejecting.")
+                        try:
+                            os.remove(out_srt)
+                        except Exception:
+                            pass
+                        return None
+                except Exception as e:
+                    log("SUBS", f"⚠️ Error validating subtitle content: {e}")
+                    return None
+
+                log("SUBS", f"✅ Extracted and verified Arabic subtitle -> {os.path.basename(out_srt)}")
+                return out_srt
     except Exception as e:
         log("SUBS", f"Failed downloading/extracting Arabic subtitle: {e}")
 
@@ -407,12 +457,22 @@ def download_subtitles_for_imdb(imdb_id: str, output_dir: str = DOWNLOAD_DIR) ->
 def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
     """
     Burn Arabic subtitles directly into video frames (hardsubbing) using FFmpeg.
-    Uses clear, readable Arabic styling with outlined text and shadow.
+    Uses sleek Netflix-style font and outline (Arial, FontSize=16, Outline=1, Shadow=0, MarginV=25).
     Audio stream is copied directly without re-encoding (-c:a copy).
     """
     if not srt_path or not os.path.exists(srt_path):
         log("HARDSUB", "No Arabic subtitle provided or file missing; using original video as fallback.")
         return video_path
+
+    # Additional sanity check on subtitle content
+    try:
+        with open(srt_path, 'r', encoding='utf-8', errors='ignore') as f:
+            sample_text = f.read(50000)
+        if not re.search(r'[\u0600-\u06FF]', sample_text):
+            log("HARDSUB", f"⚠️ Subtitle '{srt_path}' contains no Arabic Unicode characters; using original video.")
+            return video_path
+    except Exception as e:
+        log("HARDSUB", f"⚠️ Error checking subtitle content: {e}")
 
     ffmpeg_bin = shutil.which("ffmpeg")
     if not ffmpeg_bin:
@@ -428,12 +488,16 @@ def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
     clean_path = os.path.abspath(srt_path).replace("\\", "/")
     escaped_srt = clean_path.replace(":", "\\:").replace("'", "\\'")
 
+    # Sleek Netflix-style subtitle styling
+    force_style = "FontName=Arial,FontSize=16,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=1,Shadow=0,MarginV=25"
+    subtitles_filter = f"subtitles='{escaped_srt}':force_style='{force_style}'"
+
     log("HARDSUB", f"Burning Arabic subtitles into frames (NVENC): {os.path.basename(output_path)}...")
     cmd = [
         "ffmpeg", "-y",
         "-hwaccel", "cuda",
         "-i", video_path,
-        "-vf", f"subtitles='{escaped_srt}':force_style='FontSize=22,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=2,Shadow=1'",
+        "-vf", subtitles_filter,
         "-c:v", "h264_nvenc",
         "-preset", "p4",
         "-cq", "23",
@@ -443,9 +507,22 @@ def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
 
     proc = subprocess.run(cmd, capture_output=True, text=True)
     if proc.returncode != 0:
-        log("HARDSUB", f"ffmpeg hardsubbing error ({proc.returncode}): {proc.stderr[-300:]}")
-        log("HARDSUB", "Falling back to original video file.")
-        return video_path
+        log("HARDSUB", f"NVENC hardsubbing error ({proc.returncode}). Attempting CPU fallback (libx264)...")
+        cmd_cpu = [
+            "ffmpeg", "-y",
+            "-i", video_path,
+            "-vf", subtitles_filter,
+            "-c:v", "libx264",
+            "-preset", "veryfast",
+            "-crf", "22",
+            "-c:a", "copy",
+            output_path
+        ]
+        proc_cpu = subprocess.run(cmd_cpu, capture_output=True, text=True)
+        if proc_cpu.returncode != 0:
+            log("HARDSUB", f"CPU fallback failed ({proc_cpu.returncode}): {proc_cpu.stderr[-300:]}")
+            log("HARDSUB", "Falling back to original video file.")
+            return video_path
 
     if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
         file_size_mb = os.path.getsize(output_path) / (1024 * 1024)
