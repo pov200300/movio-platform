@@ -420,29 +420,25 @@ def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
         return video_path
 
     base_name, _ = os.path.splitext(video_path)
-    output_subbed_path = f"{base_name}_subbed.mp4"
-    if os.path.abspath(output_subbed_path) == os.path.abspath(video_path):
-        output_subbed_path = f"{base_name}_burned.mp4"
+    output_path = f"{base_name}_subbed.mp4"
+    if os.path.abspath(output_path) == os.path.abspath(video_path):
+        output_path = f"{base_name}_burned.mp4"
 
     # Escape special characters in the subtitle file path for FFmpeg filter syntax (escape ':' and ''')
     clean_path = os.path.abspath(srt_path).replace("\\", "/")
     escaped_srt = clean_path.replace(":", "\\:").replace("'", "\\'")
 
-    # Clear, readable Arabic styling: White text, black outline, shadow
-    style = "FontSize=22,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=2,Shadow=1"
-    subtitles_filter = f"subtitles='{escaped_srt}':force_style='{style}'"
-
-    log("HARDSUB", f"Burning Arabic subtitles into frames: {os.path.basename(output_subbed_path)}...")
+    log("HARDSUB", f"Burning Arabic subtitles into frames (NVENC): {os.path.basename(output_path)}...")
     cmd = [
-        ffmpeg_bin,
-        "-y",
+        "ffmpeg", "-y",
+        "-hwaccel", "cuda",
         "-i", video_path,
-        "-vf", subtitles_filter,
-        "-c:v", "libx264",
-        "-preset", "veryfast",
-        "-crf", "22",
+        "-vf", f"subtitles='{escaped_srt}':force_style='FontSize=22,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=2,Shadow=1'",
+        "-c:v", "h264_nvenc",
+        "-preset", "p4",
+        "-cq", "23",
         "-c:a", "copy",
-        output_subbed_path
+        output_path
     ]
 
     proc = subprocess.run(cmd, capture_output=True, text=True)
@@ -451,10 +447,10 @@ def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
         log("HARDSUB", "Falling back to original video file.")
         return video_path
 
-    if os.path.exists(output_subbed_path) and os.path.getsize(output_subbed_path) > 0:
-        file_size_mb = os.path.getsize(output_subbed_path) / (1024 * 1024)
-        log("HARDSUB", f"Hardsubbing complete! Video: {os.path.basename(output_subbed_path)} ({file_size_mb:.1f} MB)")
-        return output_subbed_path
+    if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+        file_size_mb = os.path.getsize(output_path) / (1024 * 1024)
+        log("HARDSUB", f"Hardsubbing complete! Video: {os.path.basename(output_path)} ({file_size_mb:.1f} MB)")
+        return output_path
 
     return video_path
 
