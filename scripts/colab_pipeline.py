@@ -489,7 +489,7 @@ def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
     escaped_srt = clean_path.replace(":", "\\:").replace("'", "\\'")
 
     # Sleek Netflix-style subtitle styling with Arabic Noto font support
-    force_style = "FontName=Noto Sans Arabic,FontSize=16,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=1,Shadow=0,MarginV=25"
+    force_style = "FontName=Noto Sans Arabic,FontSize=20,Bold=1,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=1.5,Shadow=0,MarginV=30"
     subtitles_filter = f"subtitles='{escaped_srt}':force_style='{force_style}'"
 
     log("HARDSUB", f"Burning Arabic subtitles into frames (NVENC): {os.path.basename(output_path)}...")
