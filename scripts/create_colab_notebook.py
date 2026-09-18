@@ -56,11 +56,11 @@ notebook = {
             "outputs": [],
             "source": [
                 "# @title ⚙️ 1. Install Dependencies & Cloud Environment\n",
-                "!apt-get update -qq\n",
-                "!apt-get install -y -qq aria2 ffmpeg\n",
+                "!apt-get update -qq && apt-get install -y -qq aria2 ffmpeg fonts-noto-core fonts-kacst fontconfig\n",
+                "!fc-cache -f -v > /dev/null 2>&1\n",
                 "!pip install -q requests requests-toolbelt beautifulsoup4 python-dotenv tqdm\n",
                 "!mkdir -p /content/download\n",
-                "print(\"✅ Cloud Environment Ready: aria2c, FFmpeg, and Python dependencies installed.\")"
+                "print(\"✅ Cloud Environment Ready: aria2c, FFmpeg, Arabic fonts (Noto/Kacst), and Python dependencies installed.\")"
             ]
         },
         {
@@ -429,8 +429,8 @@ notebook = {
                 "    clean_path = os.path.abspath(srt_path).replace(\"\\\\\", \"/\")\n",
                 "    escaped_srt = clean_path.replace(\":\", \"\\\\:\").replace(\"'\", \"\\\\'\")\n",
                 "\n",
-                "    # Sleek Netflix-style subtitle styling\n",
-                "    force_style = \"FontName=Arial,FontSize=16,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=1,Shadow=0,MarginV=25\"\n",
+                "    # Sleek Netflix-style subtitle styling with Arabic Noto font support\n",
+                "    force_style = \"FontName=Noto Sans Arabic,FontSize=16,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=1,Shadow=0,MarginV=25\"\n",
                 "    subtitles_filter = f\"subtitles='{escaped_srt}':force_style='{force_style}'\"\n",
                 "\n",
                 "    print(f\"[HARDSUB] Burning Arabic subtitles into frames (NVENC): {os.path.basename(output_path)}...\")\n",
@@ -447,13 +447,13 @@ notebook = {
                 "    ]\n",
                 "    proc = subprocess.run(cmd, capture_output=True, text=True)\n",
                 "    if proc.returncode != 0:\n",
-                "        print(f\"[HARDSUB] NVENC hardsubbing error ({proc.returncode}). Attempting CPU fallback (libx264)...\")\n",
+                "        print(f\"[HARDSUB] NVENC hardsubbing error ({proc.returncode}). Attempting CPU fallback (libx264 ultrafast)...\")\n",
                 "        cmd_cpu = [\n",
                 "            \"ffmpeg\", \"-y\",\n",
                 "            \"-i\", video_path,\n",
                 "            \"-vf\", subtitles_filter,\n",
                 "            \"-c:v\", \"libx264\",\n",
-                "            \"-preset\", \"veryfast\",\n",
+                "            \"-preset\", \"ultrafast\",\n",
                 "            \"-crf\", \"22\",\n",
                 "            \"-c:a\", \"copy\",\n",
                 "            output_path\n",

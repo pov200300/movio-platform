@@ -488,8 +488,8 @@ def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
     clean_path = os.path.abspath(srt_path).replace("\\", "/")
     escaped_srt = clean_path.replace(":", "\\:").replace("'", "\\'")
 
-    # Sleek Netflix-style subtitle styling
-    force_style = "FontName=Arial,FontSize=16,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=1,Shadow=0,MarginV=25"
+    # Sleek Netflix-style subtitle styling with Arabic Noto font support
+    force_style = "FontName=Noto Sans Arabic,FontSize=16,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=1,Shadow=0,MarginV=25"
     subtitles_filter = f"subtitles='{escaped_srt}':force_style='{force_style}'"
 
     log("HARDSUB", f"Burning Arabic subtitles into frames (NVENC): {os.path.basename(output_path)}...")
@@ -507,13 +507,13 @@ def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
 
     proc = subprocess.run(cmd, capture_output=True, text=True)
     if proc.returncode != 0:
-        log("HARDSUB", f"NVENC hardsubbing error ({proc.returncode}). Attempting CPU fallback (libx264)...")
+        log("HARDSUB", f"NVENC hardsubbing error ({proc.returncode}). Attempting CPU fallback (libx264 ultrafast)...")
         cmd_cpu = [
             "ffmpeg", "-y",
             "-i", video_path,
             "-vf", subtitles_filter,
             "-c:v", "libx264",
-            "-preset", "veryfast",
+            "-preset", "ultrafast",
             "-crf", "22",
             "-c:a", "copy",
             output_path
