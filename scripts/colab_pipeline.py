@@ -612,41 +612,50 @@ def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
         log("HARDSUB", f"⚠️ Error validating subtitle encoding: {e}; falling back to raw video.")
         return video_path
 
-    # 2. Sanitize file paths & write to a clean flat subtitle path
-    video_path = os.path.abspath(video_path)
-    output_dir = os.path.dirname(video_path)
-    os.makedirs(output_dir, exist_ok=True)
+    # 2. Implement Flat Staging Directory Architecture
+    staging_dir = "/content/staging" if os.path.exists("/content") else os.path.abspath("./staging_temp")
+    os.makedirs(staging_dir, exist_ok=True)
 
-    # Use /content if on Colab, otherwise output directory
-    temp_dir = "/content" if (os.path.exists("/content") and os.path.isdir("/content")) else output_dir
-    temp_sub_path = os.path.join(temp_dir, "temp_sub.srt")
+    staged_input = os.path.join(staging_dir, "input_video.mp4")
+    staged_sub = os.path.join(staging_dir, "sub.srt")
+    staged_output = os.path.join(staging_dir, "output_subbed.mp4")
 
+    # Clean previous staging artifacts if present
+    for p in [staged_input, staged_sub, staged_output]:
+        if os.path.exists(p) or os.path.islink(p):
+            try:
+                os.remove(p)
+            except Exception:
+                pass
+
+    # Stage the subtitle file directly inside staging_dir
     try:
-        with open(temp_sub_path, 'w', encoding='utf-8', newline='\n') as out_sf:
+        with open(staged_sub, 'w', encoding='utf-8', newline='\n') as out_sf:
             out_sf.write(clean_sub_text)
-        log("HARDSUB", f"Sanitized subtitle written in clean UTF-8: {temp_sub_path}")
+        log("HARDSUB", f"Staged subtitle written in clean UTF-8: {staged_sub}")
     except Exception as e:
-        log("HARDSUB", f"⚠️ Could not write {temp_sub_path}: {e}")
-        temp_sub_path = srt_path
-        temp_dir = os.path.dirname(os.path.abspath(srt_path))
+        log("HARDSUB", f"⚠️ Could not write {staged_sub}: {e}")
+        return video_path
 
-    # Sanitize output filename: strip brackets, parentheses, and quotes to avoid filtergraph syntax errors
-    base_name = os.path.splitext(os.path.basename(video_path))[0]
-    safe_base = re.sub(r'[\[\]\(\)\'\"`]', '', base_name).strip().replace(' ', '_')
-    output_path = os.path.join(output_dir, f"{safe_base}_subbed.mp4")
-    if os.path.abspath(output_path) == os.path.abspath(video_path):
-        output_path = os.path.join(output_dir, f"{safe_base}_burned.mp4")
+    # Stage input video via symlink (instant & zero disk overhead on Linux/Colab)
+    video_abs_path = os.path.abspath(video_path)
+    ffmpeg_input = "input_video.mp4"
+    try:
+        os.symlink(video_abs_path, staged_input)
+        log("HARDSUB", f"Staged video symlinked: {staged_input} -> {video_abs_path}")
+    except Exception as e:
+        log("HARDSUB", f"Symlink notice: {e}; referencing input path directly.")
+        ffmpeg_input = video_abs_path
 
-    # 3. Robust subtitle filter configuration (executed with cwd=temp_dir so no path colons/slashes needed)
-    sub_filename = os.path.basename(temp_sub_path)
+    # 3. Robust subtitle filter configuration (executed with cwd=staging_dir)
     force_style = "Alignment=2,MarginV=20,FontSize=21,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=1.5"
-    subtitles_filter = f"subtitles='{sub_filename}':force_style='{force_style}'"
+    subtitles_filter = f"subtitles='sub.srt':force_style='{force_style}'"
 
-    log("HARDSUB", f"Burning Arabic subtitles into frames (NVENC): {os.path.basename(output_path)}...")
+    log("HARDSUB", f"Burning Arabic subtitles into frames (NVENC): output_subbed.mp4 in {staging_dir}...")
     cmd = [
         "ffmpeg", "-y",
         "-hwaccel", "cuda",
-        "-i", video_path,
+        "-i", ffmpeg_input,
         "-vf", subtitles_filter,
         "-c:v", "h264_nvenc",
         "-preset", "p4",
@@ -654,16 +663,16 @@ def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
         "-c:a", "aac",
         "-b:a", "192k",
         "-filter:a", "volume=1.4",
-        output_path
+        "output_subbed.mp4"
     ]
 
-    proc = subprocess.run(cmd, cwd=temp_dir, capture_output=True, text=True)
+    proc = subprocess.run(cmd, cwd=staging_dir, capture_output=True, text=True)
     if proc.returncode != 0:
         err_snippet = proc.stderr[-300:] if proc.stderr else ""
         log("HARDSUB", f"NVENC hardsubbing error ({proc.returncode}): {err_snippet}. Attempting CPU fallback (libx264 ultrafast)...")
         cmd_cpu = [
             "ffmpeg", "-y",
-            "-i", video_path,
+            "-i", ffmpeg_input,
             "-vf", subtitles_filter,
             "-c:v", "libx264",
             "-preset", "ultrafast",
@@ -671,27 +680,29 @@ def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
             "-c:a", "aac",
             "-b:a", "192k",
             "-filter:a", "volume=1.4",
-            output_path
+            "output_subbed.mp4"
         ]
-        proc_cpu = subprocess.run(cmd_cpu, cwd=temp_dir, capture_output=True, text=True)
+        proc_cpu = subprocess.run(cmd_cpu, cwd=staging_dir, capture_output=True, text=True)
         if proc_cpu.returncode != 0:
             cpu_snippet = proc_cpu.stderr[-300:] if proc_cpu.stderr else ""
             log("HARDSUB", f"❌ CPU fallback failed ({proc_cpu.returncode}): {cpu_snippet}")
             log("HARDSUB", "Falling back to original video file.")
-            if temp_sub_path != srt_path and os.path.exists(temp_sub_path):
-                try: os.remove(temp_sub_path)
-                except Exception: pass
+            for p in [staged_input, staged_sub]:
+                if os.path.exists(p) or os.path.islink(p):
+                    try: os.remove(p)
+                    except Exception: pass
             return video_path
 
-    # Clean up temp subtitle file
-    if temp_sub_path != srt_path and os.path.exists(temp_sub_path):
-        try: os.remove(temp_sub_path)
-        except Exception: pass
+    # Clean up staging input symlink and subtitle file
+    for p in [staged_input, staged_sub]:
+        if os.path.exists(p) or os.path.islink(p):
+            try: os.remove(p)
+            except Exception: pass
 
-    if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
-        file_size_mb = os.path.getsize(output_path) / (1024 * 1024)
-        log("HARDSUB", f"Hardsubbing complete! Video: {os.path.basename(output_path)} ({file_size_mb:.1f} MB)")
-        return output_path
+    if os.path.exists(staged_output) and os.path.getsize(staged_output) > 0:
+        file_size_mb = os.path.getsize(staged_output) / (1024 * 1024)
+        log("HARDSUB", f"✅ Hardsubbing complete! Video: {staged_output} ({file_size_mb:.1f} MB)")
+        return staged_output
 
     return video_path
 
