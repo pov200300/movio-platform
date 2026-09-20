@@ -118,66 +118,14 @@
   gap: 1rem;
 }
 
-.searchForm {
-  display: flex;
-  align-items: center;
-  background: rgba(16, 21, 34, 0.8);
-  border: 1px solid var(--glass-border);
-  border-radius: var(--radius-full);
-  padding: 2px 4px 2px 14px;
-  width: 280px;
-  transition: all 0.25s ease;
-}
-
-.searchForm:focus-within {
-  width: 330px;
-  border-color: var(--accent-red);
-  box-shadow: 0 0 15px var(--accent-red-glow);
-  background: rgba(16, 21, 34, 1);
-}
-
-.searchInput {
-  flex: 1;
-  height: 38px;
-  background: transparent;
-  border: none;
-  color: #ffffff;
-  font-family: var(--font-main);
-  font-size: 0.88rem;
-  outline: none;
-}
-
-.searchInput::placeholder {
-  color: var(--text-muted);
-}
-
-.searchBtn {
-  width: 34px;
-  height: 34px;
-  border-radius: var(--radius-full);
-  background: var(--accent-red);
-  border: none;
-  color: #ffffff;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  transition: background 0.2s ease, transform 0.15s ease;
-}
-
-.searchBtn:hover {
-  background: var(--accent-red-hover);
-  transform: scale(1.05);
-}
-
-.searchBtn svg {
-  width: 17px;
-  height: 17px;
-}
-
 /* Mobile Drawer */
 .mobileDrawer {
   display: none;
+}
+
+.mobileSearchContainer {
+  margin-bottom: 1.25rem;
+  width: 100%;
 }
 
 @media (max-width: 900px) {
@@ -191,7 +139,7 @@
     justify-content: center;
   }
 
-  .navLeft .searchForm {
+  .navLeft {
     display: none;
   }
 
@@ -201,45 +149,6 @@
     border-top: 1px solid var(--glass-border);
     padding: 1.25rem;
     animation: slideDown 0.25s ease;
-  }
-
-  .mobileSearchForm {
-    display: flex;
-    align-items: center;
-    background: rgba(16, 21, 34, 0.9);
-    border: 1px solid var(--glass-border);
-    border-radius: var(--radius-md);
-    padding: 4px 8px;
-    margin-bottom: 1.25rem;
-  }
-
-  .mobileSearchInput {
-    flex: 1;
-    height: 40px;
-    background: transparent;
-    border: none;
-    color: #ffffff;
-    font-family: var(--font-main);
-    font-size: 0.92rem;
-    padding: 0 8px;
-    outline: none;
-  }
-
-  .mobileSearchBtn {
-    width: 36px;
-    height: 36px;
-    background: var(--accent-red);
-    border: none;
-    border-radius: var(--radius-sm);
-    color: #ffffff;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
-
-  .mobileSearchBtn svg {
-    width: 18px;
-    height: 18px;
   }
 
   .mobileNavList {

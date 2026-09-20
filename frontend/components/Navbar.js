@@ -1,14 +1,13 @@
 'use client';
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { useRouter, usePathname } from 'next/navigation';
+import { usePathname } from 'next/navigation';
+import SearchBar from './SearchBar';
 import styles from './Navbar.module.css';
 
 export default function Navbar() {
-  const [searchQuery, setSearchQuery] = useState('');
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [scrolled, setScrolled] = useState(false);
-  const router = useRouter();
   const pathname = usePathname();
 
   useEffect(() => {
@@ -23,15 +22,6 @@ export default function Navbar() {
   useEffect(() => {
     setIsMobileMenuOpen(false);
   }, [pathname]);
-
-  const handleSearchSubmit = (e) => {
-    e.preventDefault();
-    if (searchQuery.trim()) {
-      router.push(`/movies?search=${encodeURIComponent(searchQuery.trim())}`);
-      setSearchQuery('');
-      setIsMobileMenuOpen(false);
-    }
-  };
 
   return (
     <header className={`${styles.header} ${scrolled ? styles.headerScrolled : ''}`}>
@@ -59,7 +49,7 @@ export default function Navbar() {
             </svg>
           </button>
 
-          <Link href="/" className={styles.logo}>
+          <Link href="/" className={styles.logo} aria-label="EGYMAX الرئيسية">
             <span className={styles.logoRed}>EGY</span>
             <span className={styles.logoWhite}>MAX</span>
           </Link>
@@ -98,44 +88,18 @@ export default function Navbar() {
           </nav>
         </div>
 
-        {/* Left Section: Search & Browse Category */}
+        {/* Left Section: Real-Time Autocomplete Search */}
         <div className={styles.navLeft}>
-          <form onSubmit={handleSearchSubmit} className={styles.searchForm}>
-            <input
-              type="text"
-              placeholder="ابحث عن فيلم أو ممثل..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className={styles.searchInput}
-            />
-            <button type="submit" className={styles.searchBtn} aria-label="بحث">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="11" cy="11" r="8" />
-                <line x1="21" y1="21" x2="16.65" y2="16.65" />
-              </svg>
-            </button>
-          </form>
+          <SearchBar />
         </div>
       </div>
 
       {/* Mobile Dropdown Menu */}
       {isMobileMenuOpen && (
         <div className={styles.mobileDrawer}>
-          <form onSubmit={handleSearchSubmit} className={styles.mobileSearchForm}>
-            <input
-              type="text"
-              placeholder="ابحث عن فيلم أو ممثل..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className={styles.mobileSearchInput}
-            />
-            <button type="submit" className={styles.mobileSearchBtn} aria-label="بحث">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                <circle cx="11" cy="11" r="8" />
-                <line x1="21" y1="21" x2="16.65" y2="16.65" />
-              </svg>
-            </button>
-          </form>
+          <div className={styles.mobileSearchContainer}>
+            <SearchBar isMobile onNavigate={() => setIsMobileMenuOpen(false)} />
+          </div>
 
           <ul className={styles.mobileNavList}>
             <li>

@@ -1,0 +1,347 @@
+.searchContainer {
+  position: relative;
+  width: 300px;
+  transition: width 0.25s ease;
+}
+
+.searchContainer:focus-within {
+  width: 350px;
+}
+
+.searchContainerMobile {
+  width: 100% !important;
+}
+
+.searchForm {
+  display: flex;
+  align-items: center;
+  background: rgba(16, 21, 34, 0.85);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-full);
+  padding: 2px 4px 2px 14px;
+  transition: all 0.25s ease;
+}
+
+.searchForm:focus-within {
+  border-color: var(--accent-red);
+  box-shadow: 0 0 16px var(--accent-red-glow);
+  background: rgba(16, 21, 34, 1);
+}
+
+.searchInput {
+  flex: 1;
+  height: 38px;
+  background: transparent;
+  border: none;
+  color: #ffffff;
+  font-family: var(--font-main);
+  font-size: 0.88rem;
+  outline: none;
+}
+
+.searchInput::placeholder {
+  color: var(--text-muted);
+}
+
+.searchBtn {
+  width: 34px;
+  height: 34px;
+  border-radius: var(--radius-full);
+  background: var(--accent-red);
+  border: none;
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.2s ease, transform 0.15s ease;
+}
+
+.searchBtn:hover {
+  background: var(--accent-red-hover);
+  transform: scale(1.05);
+}
+
+.searchBtn svg {
+  width: 17px;
+  height: 17px;
+}
+
+/* Spinner Animation */
+.spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: #ffffff;
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Glassmorphic Autocomplete Dropdown */
+.dropdown {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  min-width: 380px;
+  max-width: calc(100vw - 2rem);
+  z-index: 1000;
+  background: rgba(10, 14, 23, 0.96);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  box-shadow: 0 20px 45px rgba(0, 0, 0, 0.85), 0 0 20px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+  animation: dropdownFadeIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.searchContainerMobile .dropdown {
+  left: 0;
+  right: 0;
+  min-width: 100%;
+  width: 100%;
+}
+
+@keyframes dropdownFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.suggestionsHeader {
+  padding: 10px 14px 6px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.suggestionsList {
+  list-style: none;
+  max-height: 380px;
+  overflow-y: auto;
+}
+
+.suggestionsList::-webkit-scrollbar {
+  width: 5px;
+}
+
+.suggestionsList::-webkit-scrollbar-thumb {
+  background: #1e2638;
+  border-radius: 3px;
+}
+
+.suggestionItem {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  cursor: pointer;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  transition: all 0.2s ease;
+  position: relative;
+}
+
+.suggestionItem:last-child {
+  border-bottom: none;
+}
+
+.suggestionItem:hover,
+.itemSelected {
+  background: rgba(229, 9, 20, 0.15) !important;
+}
+
+.itemSelected::after {
+  content: '';
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: var(--accent-red);
+}
+
+.thumbWrapper {
+  position: relative;
+  width: 44px;
+  height: 64px;
+  flex-shrink: 0;
+  border-radius: 6px;
+  overflow: hidden;
+  background: #090d16;
+  border: 1px solid var(--glass-border);
+}
+
+.thumbImg {
+  object-fit: cover;
+}
+
+.itemInfo {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.itemTitleAr {
+  font-size: 0.92rem;
+  font-weight: 800;
+  color: #ffffff;
+  line-height: 1.3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.itemTitleEn {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: ltr;
+  text-align: right;
+  unicode-bidi: isolate;
+}
+
+.itemMetaRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.ratingBadge {
+  background: rgba(245, 158, 11, 0.2);
+  border: 1px solid rgba(245, 158, 11, 0.4);
+  color: var(--accent-gold);
+  font-size: 0.68rem;
+  font-weight: 800;
+  padding: 1px 6px;
+  border-radius: 3px;
+}
+
+.yearBadge {
+  background: rgba(255, 255, 255, 0.06);
+  color: #94a3b8;
+  font-size: 0.68rem;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 3px;
+}
+
+.qualityBadge {
+  background: rgba(229, 9, 20, 0.2);
+  border: 1px solid rgba(229, 9, 20, 0.4);
+  color: #ff4d58;
+  font-size: 0.68rem;
+  font-weight: 800;
+  padding: 1px 6px;
+  border-radius: 3px;
+}
+
+.itemArrow {
+  color: var(--text-muted);
+  font-size: 1.1rem;
+  transition: transform 0.2s ease, color 0.2s ease;
+  padding-left: 4px;
+}
+
+.suggestionItem:hover .itemArrow,
+.itemSelected .itemArrow {
+  color: var(--accent-red);
+  transform: translateX(-3px);
+}
+
+/* Dropdown Footer */
+.dropdownFooter {
+  padding: 11px 14px;
+  background: rgba(16, 21, 34, 0.95);
+  border-top: 1px solid var(--glass-border);
+  color: #cbd5e1;
+  font-size: 0.85rem;
+  font-weight: 700;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  transition: all 0.2s ease;
+}
+
+.dropdownFooter strong {
+  color: #ffffff;
+}
+
+.dropdownFooter:hover {
+  background: rgba(229, 9, 20, 0.2);
+  color: var(--accent-red);
+}
+
+.dropdownFooter:hover strong {
+  color: var(--accent-red);
+}
+
+.footerArrow {
+  font-size: 1.1rem;
+  transition: transform 0.2s ease;
+}
+
+.dropdownFooter:hover .footerArrow {
+  transform: translateX(-4px);
+}
+
+/* Empty Results Box */
+.emptyResults {
+  padding: 1.5rem 1rem;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.emptyIcon {
+  font-size: 1.6rem;
+}
+
+.emptyResults p {
+  font-size: 0.88rem;
+  color: var(--text-sub);
+}
+
+.emptyResults strong {
+  color: #ffffff;
+}
+
+.emptyLink {
+  color: var(--accent-red);
+  font-size: 0.85rem;
+  font-weight: 700;
+  text-decoration: none;
+  margin-top: 0.25rem;
+  transition: opacity 0.2s ease;
+}
+
+.emptyLink:hover {
+  opacity: 0.8;
+  text-decoration: underline;
+}
+
+@media (max-width: 900px) {
+  .searchContainer {
+    width: 100% !important;
+  }
+}
