@@ -56,11 +56,11 @@ notebook = {
             "outputs": [],
             "source": [
                 "# @title ⚙️ 1. Install Dependencies & Cloud Environment\n",
-                "!apt-get update -qq && apt-get install -y -qq aria2 ffmpeg fonts-noto-core fonts-kacst fontconfig\n",
-                "!fc-cache -f -v > /dev/null 2>&1\n",
+                "!apt-get update -qq && apt-get install -y -qq aria2 ffmpeg fonts-noto-core\n",
+                "!fc-cache -fv > /dev/null 2>&1\n",
                 "!pip install -q requests requests-toolbelt beautifulsoup4 python-dotenv tqdm deep-translator\n",
                 "!mkdir -p /content/download /content/staging\n",
-                "print(\"✅ Cloud Environment Ready: aria2c, FFmpeg, Arabic fonts (Noto/Kacst), and Python dependencies installed.\")"
+                "print(\"✅ Cloud Environment Ready: aria2c, FFmpeg, Arabic Noto fonts, and Python dependencies installed.\")"
             ]
         },
         {
@@ -598,7 +598,7 @@ notebook = {
                 "        ffmpeg_input = video_abs\n",
                 "\n",
                 "    # 3. Robust subtitle filter configuration (executed strictly with cwd=staging_dir)\n",
-                "    force_style = \"Alignment=2,MarginV=20,FontSize=21,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=1.5\"\n",
+                "    force_style = \"Fontname=Noto Sans Arabic,Alignment=2,MarginV=25,FontSize=24,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=0,Shadow=0\"\n",
                 "    subtitles_filter = f\"subtitles='sub.srt':force_style='{force_style}'\"\n",
                 "\n",
                 "    # 4. Probe source video properties and calculate dynamic visually-lossless bitrate\n",

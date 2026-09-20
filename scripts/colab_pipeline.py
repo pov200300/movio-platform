@@ -711,7 +711,7 @@ def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
         ffmpeg_input = video_abs_path
 
     # 3. Robust subtitle filter configuration (executed with cwd=staging_dir)
-    force_style = "Alignment=2,MarginV=20,FontSize=21,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=1.5"
+    force_style = "Fontname=Noto Sans Arabic,Alignment=2,MarginV=25,FontSize=24,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=0,Shadow=0"
     subtitles_filter = f"subtitles='sub.srt':force_style='{force_style}'"
 
     # 4. Probe source video properties and calculate dynamic visually-lossless bitrate
