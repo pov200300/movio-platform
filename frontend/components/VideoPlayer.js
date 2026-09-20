@@ -1,11 +1,23 @@
 'use client';
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import Image from 'next/image';
+import CinemaPlayer from './CinemaPlayer';
 import styles from './VideoPlayer.module.css';
 
-export default function VideoPlayer({ embedUrl, embedHtml, posterUrl, title }) {
+export default function VideoPlayer({
+  slug,
+  embedUrl,
+  directStreamUrl,
+  embedHtml,
+  posterUrl,
+  title,
+}) {
   const [isPlaying, setIsPlaying] = useState(false);
-  const [activeServer, setActiveServer] = useState(1);
+  const [activeServer, setActiveServer] = useState(1); // 1 = VIP Direct, 2 = DoodStream Mirror, 3 = CDN Embed
+  const [streamUrl, setStreamUrl] = useState(directStreamUrl || null);
+  const [isResolving, setIsResolving] = useState(false);
+  const [streamFailed, setStreamFailed] = useState(false);
+  const [isTheater, setIsTheater] = useState(false);
 
   // Extract clean embed URL if embedHtml was passed instead
   let rawUrl = embedUrl;
@@ -14,25 +26,81 @@ export default function VideoPlayer({ embedUrl, embedHtml, posterUrl, title }) {
     if (match) rawUrl = match[1];
   }
 
-  // Generate live mirror servers from primary DoodStream embed
-  let server1Url = rawUrl;
-  let server2Url = null;
-  let server3Url = null;
+  // Generate live mirror servers
+  let doodMirrorUrl = rawUrl;
+  let cdnMirrorUrl = null;
 
   if (rawUrl) {
-    server1Url = rawUrl.replace('dood.to', 'doodstream.com').replace('dood.so', 'doodstream.com');
-    server2Url = rawUrl.replace('doodstream.com', 'dood.to');
-    server3Url = rawUrl.replace('doodstream.com', 'dood.so').replace('dood.to', 'dood.so');
+    doodMirrorUrl = rawUrl.replace('dood.to', 'doodstream.com').replace('dood.so', 'doodstream.com');
+    cdnMirrorUrl = rawUrl.replace('doodstream.com', 'dood.so').replace('dood.to', 'dood.so');
   }
 
-  const currentEmbedUrl = activeServer === 1 ? server1Url : activeServer === 2 ? server2Url : server3Url;
+  // Attempt resolving direct stream when VIP server is active
+  useEffect(() => {
+    let isCancelled = false;
+
+    async function resolveStream() {
+      if (directStreamUrl) {
+        setStreamUrl(directStreamUrl);
+        return;
+      }
+
+      if (!slug) return;
+
+      setIsResolving(true);
+      try {
+        const res = await fetch(`/api/stream/${slug}${embedUrl ? `?url=${encodeURIComponent(embedUrl)}` : ''}`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.success && data.streamUrl && !isCancelled) {
+            setStreamUrl(data.streamUrl);
+            setStreamFailed(false);
+            return;
+          }
+        }
+      } catch (err) {
+        console.warn('Could not resolve direct stream link:', err);
+      } finally {
+        if (!isCancelled) setIsResolving(false);
+      }
+
+      // If direct stream resolution failed, fallback to DoodStream mirror
+      if (!isCancelled) {
+        setStreamFailed(true);
+        setActiveServer(2); // Auto-switch to DoodStream mirror
+      }
+    }
+
+    if (activeServer === 1 && !streamUrl) {
+      resolveStream();
+    }
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [slug, embedUrl, directStreamUrl, activeServer, streamUrl]);
+
+  // Fallback handler when stream errors out during playback
+  const handleCinemaError = useCallback(() => {
+    console.warn('Direct stream error encountered, switching to fallback embed.');
+    setStreamFailed(true);
+    setActiveServer(2); // Switch to DoodStream Mirror
+  }, []);
 
   const handlePlayClick = () => {
     setIsPlaying(true);
   };
 
+  const handleServerChange = (serverNum) => {
+    setActiveServer(serverNum);
+    setIsPlaying(true);
+    if (serverNum === 1 && streamFailed && !streamUrl) {
+      setStreamFailed(false);
+    }
+  };
+
   return (
-    <div className={styles.playerWrapper}>
+    <div className={`${styles.playerWrapper} ${isTheater ? styles.playerWrapperTheater : ''}`}>
       {/* 16:9 Responsive Theater Frame */}
       <div className={styles.playerContainer}>
         {!isPlaying ? (
@@ -58,15 +126,42 @@ export default function VideoPlayer({ embedUrl, embedHtml, posterUrl, title }) {
             </div>
 
             <div className={styles.overlayInfo}>
-              <span className={styles.streamBadge}>FHD 1080p • سيرفر صاروخي</span>
-              <p className={styles.playText}>انقر هنا لبدء المشاهدة المباشرة</p>
+              <span className={styles.streamBadge}>
+                {activeServer === 1 ? 'مشغل EGYMAX السينمائي VIP' : 'FHD 1080p • سيرفر سريع'}
+              </span>
+              <p className={styles.playText}>انقر هنا لبدء المشاهدة السينمائية الفائقة</p>
             </div>
           </div>
-        ) : currentEmbedUrl ? (
+        ) : activeServer === 1 && streamUrl && !streamFailed ? (
+          /* Custom EGYMAX Cinema Player */
+          <CinemaPlayer
+            url={streamUrl}
+            poster={posterUrl}
+            title={title}
+            isTheater={isTheater}
+            onTheaterToggle={() => setIsTheater((prev) => !prev)}
+            onError={handleCinemaError}
+          />
+        ) : activeServer === 2 && doodMirrorUrl ? (
+          /* Fallback Server 1: DoodStream Mirror */
           <div className={styles.iframeWrapper}>
             <iframe 
-              src={currentEmbedUrl} 
-              title={title || 'EGYMAX Player'}
+              src={doodMirrorUrl} 
+              title={title || 'EGYMAX DoodStream Mirror'}
+              width="100%" 
+              height="100%" 
+              frameBorder="0" 
+              allowFullScreen 
+              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+              scrolling="no"
+            />
+          </div>
+        ) : activeServer === 3 && cdnMirrorUrl ? (
+          /* Fallback Server 2: CDN Embed */
+          <div className={styles.iframeWrapper}>
+            <iframe 
+              src={cdnMirrorUrl} 
+              title={title || 'EGYMAX CDN Mirror'}
               width="100%" 
               height="100%" 
               frameBorder="0" 
@@ -84,8 +179,8 @@ export default function VideoPlayer({ embedUrl, embedHtml, posterUrl, title }) {
           <div className={styles.demoWrapper}>
             <div className={styles.demoNotice}>
               <span className={styles.demoIcon}>⏳</span>
-              <h3>سيرفر المشاهدة قيد المعالجة</h3>
-              <p>يتم تجهيز النسخة فائقة الجودة وترجمة الفيلم تلقائياً عبر سحابة EGYMAX.</p>
+              <h3>سيرفر المشاهدة قيد التجهيز</h3>
+              <p>يتم إعداد ومعالجة البث عالي الدقة تلقائياً عبر سحابة EGYMAX.</p>
             </div>
           </div>
         )}
@@ -94,36 +189,45 @@ export default function VideoPlayer({ embedUrl, embedHtml, posterUrl, title }) {
       {/* Multi-Server Selection Tabs Directly Below Player */}
       <div className={styles.serverSection}>
         <div className={styles.serverHeader}>
-          <span className={styles.serverTitle}>اختر سيرفر المشاهدة:</span>
+          <div className={styles.serverTitleGroup}>
+            <span className={styles.serverTitle}>اختر سيرفر المشاهدة:</span>
+            {activeServer === 1 && streamUrl && !streamFailed && (
+              <span className={styles.vipTag}>VIP Ultra HD</span>
+            )}
+          </div>
           <span className={styles.serverHint}>إذا توقف سيرفر، قم بالتبديل إلى سيرفر آخر فوراً</span>
         </div>
 
         <div className={styles.serverTabs}>
+          {/* Server 1: VIP Direct Cinema Player */}
           <button 
             type="button"
-            onClick={() => { setActiveServer(1); setIsPlaying(true); }} 
+            onClick={() => handleServerChange(1)} 
             className={`${styles.serverTab} ${activeServer === 1 ? styles.activeTab : ''}`}
           >
             <span className={styles.tabIcon}>🔴</span>
-            <span>سيرفر المشاهدة 1 (DoodStream)</span>
+            <span>سيرفر EGYMAX السينمائي (VIP Direct)</span>
+            {isResolving && <span className={styles.tabLoading}>⏳</span>}
           </button>
           
+          {/* Server 2: DoodStream Mirror */}
           <button 
             type="button"
-            onClick={() => { setActiveServer(2); setIsPlaying(true); }} 
+            onClick={() => handleServerChange(2)} 
             className={`${styles.serverTab} ${activeServer === 2 ? styles.activeTab : ''}`}
           >
             <span className={styles.tabIcon}>⚡</span>
-            <span>سيرفر بديل 2 (CDN Mirror)</span>
+            <span>سيرفر بديل 1 (DoodStream Mirror)</span>
           </button>
           
+          {/* Server 3: CDN Embed */}
           <button 
             type="button"
-            onClick={() => { setActiveServer(3); setIsPlaying(true); }} 
+            onClick={() => handleServerChange(3)} 
             className={`${styles.serverTab} ${activeServer === 3 ? styles.activeTab : ''}`}
           >
             <span className={styles.tabIcon}>💾</span>
-            <span>سيرفر 3 (Fast Stream)</span>
+            <span>سيرفر بديل 2 (CDN Embed)</span>
           </button>
         </div>
       </div>

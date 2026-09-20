@@ -181,10 +181,32 @@
   gap: 0.5rem;
 }
 
+.serverTitleGroup {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
 .serverTitle {
   color: #ffffff;
   font-size: 0.95rem;
   font-weight: 800;
+}
+
+.vipTag {
+  background: var(--accent-red);
+  color: #ffffff;
+  font-size: 0.68rem;
+  font-weight: 800;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  box-shadow: 0 2px 8px var(--accent-red-glow);
+  letter-spacing: 0.5px;
+}
+
+.tabLoading {
+  font-size: 0.8rem;
+  margin-right: 4px;
 }
 
 .serverHint {

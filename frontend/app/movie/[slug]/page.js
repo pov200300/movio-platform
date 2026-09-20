@@ -67,7 +67,9 @@ export default async function MoviePage({ params }) {
           </div>
 
           <VideoPlayer 
+            slug={params.slug}
             embedUrl={movie.embedUrl}
+            directStreamUrl={movie.directStreamUrl}
             posterUrl={movie.posterUrl} 
             title={movie.rawTitle} 
           />

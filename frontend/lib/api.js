@@ -181,6 +181,12 @@ export function parseMovieData(post) {
     rating,
     quality,
     embedUrl,
+    directStreamUrl: post.meta?.direct_stream_url ||
+                     post.meta?.stream_url ||
+                     post.meta?.direct_video_url ||
+                     post.meta?.video_url ||
+                     post.meta?.mp4_url ||
+                     null,
     posterUrl,
     synopsis,
     categories: post.categories || [],

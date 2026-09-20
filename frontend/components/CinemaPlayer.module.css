@@ -1,0 +1,160 @@
+.playerContainer {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  background: #000000;
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid var(--glass-border);
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.9);
+  transition: all 0.3s ease;
+}
+
+.theaterMode {
+  border-color: var(--accent-red);
+  box-shadow: 0 25px 60px rgba(229, 9, 20, 0.25);
+}
+
+.artWrapper {
+  width: 100%;
+  height: 100%;
+  position: absolute;
+  inset: 0;
+}
+
+/* Override Artplayer UI Elements for Pure Cinema Red Theme */
+.playerContainer :global(.art-video-player) {
+  font-family: var(--font-main) !important;
+}
+
+.playerContainer :global(.art-bottom) {
+  background: linear-gradient(
+    to top,
+    rgba(0, 0, 0, 0.9) 0%,
+    rgba(0, 0, 0, 0.6) 60%,
+    transparent 100%
+  ) !important;
+  padding: 0 10px !important;
+}
+
+.playerContainer :global(.art-progress-played) {
+  background: var(--accent-red) !important;
+}
+
+.playerContainer :global(.art-progress-indicator) {
+  background: #ffffff !important;
+  border: 2px solid var(--accent-red) !important;
+  box-shadow: 0 0 10px var(--accent-red-glow) !important;
+}
+
+.playerContainer :global(.art-volume-slider-handle) {
+  background: var(--accent-red) !important;
+}
+
+.playerContainer :global(.art-control-volume .art-volume-slider) {
+  background: rgba(255, 255, 255, 0.2) !important;
+}
+
+.playerContainer :global(.art-control-volume .art-volume-slider .art-volume-slider-value) {
+  background: var(--accent-red) !important;
+}
+
+.playerContainer :global(.art-notice) {
+  background: rgba(10, 14, 23, 0.85) !important;
+  backdrop-filter: blur(12px) !important;
+  border: 1px solid var(--glass-border) !important;
+  border-radius: 8px !important;
+  color: #ffffff !important;
+  font-weight: 700 !important;
+}
+
+.playerContainer :global(.art-setting) {
+  background: rgba(10, 14, 23, 0.95) !important;
+  backdrop-filter: blur(16px) !important;
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  border-radius: 10px !important;
+}
+
+.playerContainer :global(.art-setting-item:hover) {
+  background: rgba(229, 9, 20, 0.2) !important;
+}
+
+.playerContainer :global(.art-state) {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+}
+
+.playerContainer :global(.art-state svg) {
+  filter: drop-shadow(0 0 15px var(--accent-red-glow)) !important;
+}
+
+/* Gesture Notification Overlay */
+.gestureOverlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  z-index: 40;
+}
+
+.gestureBadge {
+  background: rgba(5, 7, 12, 0.88);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(229, 9, 20, 0.5);
+  color: #ffffff;
+  font-size: 1.25rem;
+  font-weight: 900;
+  padding: 12px 28px;
+  border-radius: 30px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.8), 0 0 20px var(--accent-red-glow);
+  animation: gesturePop 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes gesturePop {
+  0% {
+    opacity: 0;
+    transform: scale(0.85);
+  }
+  30% {
+    opacity: 1;
+    transform: scale(1.05);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1);
+  }
+}
+
+/* Error Fallback Banner */
+.errorOverlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(5, 7, 12, 0.95);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem;
+  text-align: center;
+  gap: 0.75rem;
+  z-index: 50;
+}
+
+.errorIcon {
+  font-size: 2.2rem;
+}
+
+.errorOverlay h4 {
+  color: #ffffff;
+  font-size: 1.2rem;
+  font-weight: 800;
+}
+
+.errorOverlay p {
+  color: var(--text-sub);
+  font-size: 0.92rem;
+  max-width: 440px;
+}
