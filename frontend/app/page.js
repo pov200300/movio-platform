@@ -57,7 +57,7 @@ export default async function Home() {
       </section>
 
       {/* Section 2: أحدث الأفلام المضافة */}
-      <section className={styles.section}>
+      <section id="latest-movies" className={styles.section}>
         <div className={styles.sectionHeader}>
           <div className={styles.titleGroup}>
             <span className={styles.iconPulse}>🔥</span>

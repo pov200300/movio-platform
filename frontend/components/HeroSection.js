@@ -1,88 +1,87 @@
 import Link from 'next/link';
 import Image from 'next/image';
 import styles from './HeroSection.module.css';
-import { parseMovieData } from '../lib/api';
 
 export default function HeroSection({ featuredMovie }) {
-  if (!featuredMovie) return null;
-
-  const movie = parseMovieData(featuredMovie);
-  if (!movie) return null;
-
-  // Extract backdrop or poster
-  let backdropUrl = featuredMovie.meta?.backdrop_url;
-  if (!backdropUrl && featuredMovie._embedded && featuredMovie._embedded['wp:featuredmedia']?.[0]?.source_url) {
+  // Extract high-res backdrop if available from featured movie
+  let backdropUrl = featuredMovie?.meta?.backdrop_url;
+  if (!backdropUrl && featuredMovie?._embedded && featuredMovie._embedded['wp:featuredmedia']?.[0]?.source_url) {
     backdropUrl = featuredMovie._embedded['wp:featuredmedia'][0].source_url;
   }
-  if (!backdropUrl) {
-    backdropUrl = movie.posterUrl || '/placeholder.jpg';
-  }
-
-  // Synopsis cleanup
-  let cleanSynopsis = movie.synopsis || '';
-  cleanSynopsis = cleanSynopsis.replace(/<[^>]+>/g, '').trim();
-  if (cleanSynopsis.length > 220) {
-    cleanSynopsis = cleanSynopsis.substring(0, 220) + '...';
+  if (!backdropUrl && featuredMovie?.posterUrl) {
+    backdropUrl = featuredMovie.posterUrl;
   }
 
   return (
     <div className={styles.heroBanner}>
-      {/* Background Image with Vignette & Gradients */}
+      {/* Background Image with Rich Multi-Stop Vignette */}
       <div className={styles.backdropWrapper}>
-        <Image
-          src={backdropUrl}
-          alt={movie.rawTitle}
-          fill
-          priority
-          sizes="100vw"
-          className={styles.backdropImage}
-        />
-        <div className={styles.vignetteOverlay} />
+        {backdropUrl && (
+          <Image
+            src={backdropUrl}
+            alt="EGYMAX Cinema Backdrop"
+            fill
+            priority
+            sizes="100vw"
+            className={styles.backdropImage}
+          />
+        )}
+        <div className={styles.cinematicOverlay} />
         <div className={styles.radialGlow} />
-        <div className={styles.bottomGradient} />
       </div>
 
-      {/* Hero Content */}
+      {/* Hero Showcase Content */}
       <div className={styles.heroContent}>
+        {/* Top Badges */}
         <div className={styles.badgeRow}>
-          <span className={styles.featuredBadge}>🔥 المميز اليوم</span>
-          <span className={styles.badgeSub}>مترجم بالعربية</span>
+          <span className={styles.badgeFire}>🔥 المنصة الأولى</span>
           <span className={styles.badgeQuality}>4K ULTRA HD</span>
+          <span className={styles.badgeSub}>مترجم بالكامل</span>
         </div>
 
-        <h1 className={styles.title}>
-          مشاهدة فيلم <span dangerouslySetInnerHTML={{ __html: movie.displayTitle }} />
+        {/* Main Showcase Title */}
+        <h1 className={styles.heroTitle}>
+          <span className={styles.textRed}>EGY</span>
+          <span className={styles.textWhite}>MAX</span>
         </h1>
 
-        <div className={styles.metaRow}>
-          <span className={styles.ratingBadge}>
-            ★ {movie.rating} <span className={styles.ratingLabel}>TMDB</span>
-          </span>
-          <span className={styles.metaItem}>{movie.year}</span>
-          <span className={styles.metaDot}>•</span>
-          <span className={styles.metaItem}>سيرفر مباشر فائقة السرعة</span>
+        {/* Catchy Arabic Tagline */}
+        <p className={styles.tagline}>
+          بوابتك الأولى لمشاهدة وتحميل أحدث الأفلام والمسلسلات الحصرية بجودة فائقة وترجمة احترافية وسيرفرات فائقة السرعة.
+        </p>
+
+        {/* Feature Highlights Row */}
+        <div className={styles.featuresRow}>
+          <div className={styles.featurePill}>
+            <span className={styles.featureIcon}>⚡</span>
+            <span>سيرفرات مباشرة فائقة السرعة</span>
+          </div>
+          <span className={styles.featureDot}>•</span>
+          <div className={styles.featurePill}>
+            <span className={styles.featureIcon}>🎬</span>
+            <span>مكتبة متجددة يومياً</span>
+          </div>
+          <span className={styles.featureDot}>•</span>
+          <div className={styles.featurePill}>
+            <span className={styles.featureIcon}>🍿</span>
+            <span>مشاهدة مجانية 100%</span>
+          </div>
         </div>
 
-        {cleanSynopsis && (
-          <p className={styles.synopsis}>
-            {cleanSynopsis}
-          </p>
-        )}
-
+        {/* Action Buttons */}
         <div className={styles.actionButtons}>
-          <Link href={`/movie/${movie.slug}`} className={styles.playBtn}>
+          <a href="#latest-movies" className={styles.primaryBtn}>
             <svg viewBox="0 0 24 24" fill="currentColor">
               <path d="M8 5v14l11-7z" />
             </svg>
-            <span>شاهد الآن</span>
-          </Link>
-          <Link href={`/movie/${movie.slug}`} className={styles.detailsBtn}>
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="12" cy="12" r="10" />
-              <line x1="12" y1="16" x2="12" y2="12" />
-              <line x1="12" y1="8" x2="12.01" y2="8" />
+            <span>تصفح أحدث الأفلام</span>
+          </a>
+
+          <Link href="/movies?sort=rating" className={styles.secondaryBtn}>
+            <svg viewBox="0 0 24 24" fill="currentColor">
+              <path d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z" />
             </svg>
-            <span>المزيد من التفاصيل</span>
+            <span>الأعلى تقييماً</span>
           </Link>
         </div>
       </div>
