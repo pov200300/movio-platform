@@ -13,7 +13,8 @@ export default function VideoPlayer({
   title,
 }) {
   const [isPlaying, setIsPlaying] = useState(false);
-  const [activeServer, setActiveServer] = useState(1); // 1 = VIP Direct, 2 = DoodStream Mirror, 3 = CDN Embed
+  // Default on load: Server 1 (Embed / Fast Mirror) for immediate video loading
+  const [activeServer, setActiveServer] = useState(1); // 1 = Server 1, 2 = Server 2, 3 = EGYMAX VIP
   const [streamUrl, setStreamUrl] = useState(directStreamUrl || null);
   const [isResolving, setIsResolving] = useState(false);
   const [streamFailed, setStreamFailed] = useState(false);
@@ -27,15 +28,15 @@ export default function VideoPlayer({
   }
 
   // Generate live mirror servers
-  let doodMirrorUrl = rawUrl;
-  let cdnMirrorUrl = null;
+  let server1Url = rawUrl;
+  let server2Url = null;
 
   if (rawUrl) {
-    doodMirrorUrl = rawUrl.replace('dood.to', 'doodstream.com').replace('dood.so', 'doodstream.com');
-    cdnMirrorUrl = rawUrl.replace('doodstream.com', 'dood.so').replace('dood.to', 'dood.so');
+    server1Url = rawUrl.replace('dood.to', 'doodstream.com').replace('dood.so', 'doodstream.com');
+    server2Url = rawUrl.replace('doodstream.com', 'dood.so').replace('dood.to', 'dood.so');
   }
 
-  // Function to resolve direct stream link without switching tabs
+  // Function to resolve direct stream link for EGYMAX VIP player
   const resolveStream = useCallback(async () => {
     if (directStreamUrl) {
       setStreamUrl(directStreamUrl);
@@ -68,13 +69,13 @@ export default function VideoPlayer({
       setIsResolving(false);
     }
 
-    // Set error state, but strictly KEEP activeServer at 1 (NO auto-switching)
+    // Mark as failed if unresolvable, but keep user on EGYMAX tab without bouncing
     setStreamFailed(true);
   }, [slug, embedUrl, directStreamUrl]);
 
-  // Attempt stream resolution when user activates Server 1
+  // Attempt stream resolution when user activates EGYMAX server (Server 3)
   useEffect(() => {
-    if (activeServer === 1 && !streamUrl && !streamFailed && isPlaying) {
+    if (activeServer === 3 && !streamUrl && !streamFailed && isPlaying) {
       resolveStream();
     }
   }, [activeServer, streamUrl, streamFailed, isPlaying, resolveStream]);
@@ -87,7 +88,7 @@ export default function VideoPlayer({
 
   const handlePlayClick = () => {
     setIsPlaying(true);
-    if (activeServer === 1 && !streamUrl && !streamFailed) {
+    if (activeServer === 3 && !streamUrl && !streamFailed) {
       resolveStream();
     }
   };
@@ -95,7 +96,7 @@ export default function VideoPlayer({
   const handleServerChange = (serverNum) => {
     setActiveServer(serverNum);
     setIsPlaying(true);
-    if (serverNum === 1 && (streamFailed || !streamUrl)) {
+    if (serverNum === 3 && (streamFailed || !streamUrl)) {
       resolveStream();
     }
   };
@@ -135,18 +136,46 @@ export default function VideoPlayer({
 
             <div className={styles.overlayInfo}>
               <span className={styles.streamBadge}>
-                {activeServer === 1 ? 'مشغل EGYMAX السينمائي VIP' : 'FHD 1080p • سيرفر سريع'}
+                {activeServer === 3 ? 'EGYMAX VIP Cinema Player' : `Server ${activeServer} • FHD 1080p`}
               </span>
-              <p className={styles.playText}>انقر هنا لبدء المشاهدة السينمائية الفائقة</p>
+              <p className={styles.playText}>انقر هنا لبدء المشاهدة</p>
             </div>
           </div>
-        ) : activeServer === 1 ? (
-          /* Server 1: VIP Direct Cinema Player or Inline Status/Retry Box */
+        ) : activeServer === 1 && server1Url ? (
+          /* Server 1 (Default): Fast DoodStream Embed */
+          <div className={styles.iframeWrapper}>
+            <iframe 
+              src={server1Url} 
+              title={title || 'EGYMAX Server 1'}
+              width="100%" 
+              height="100%" 
+              frameBorder="0" 
+              allowFullScreen 
+              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+              scrolling="no"
+            />
+          </div>
+        ) : activeServer === 2 && (server2Url || server1Url) ? (
+          /* Server 2: CDN / Backup Embed */
+          <div className={styles.iframeWrapper}>
+            <iframe 
+              src={server2Url || server1Url} 
+              title={title || 'EGYMAX Server 2'}
+              width="100%" 
+              height="100%" 
+              frameBorder="0" 
+              allowFullScreen 
+              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+              scrolling="no"
+            />
+          </div>
+        ) : activeServer === 3 ? (
+          /* Server 3: Custom EGYMAX VIP CinemaPlayer */
           isResolving ? (
             <div className={styles.loaderBox}>
               <div className={styles.cinemaSpinner} />
-              <h4>جارٍ الاتصال بسيرفر البث المباشر (VIP)...</h4>
-              <p>يتم فحص سرعة واستقرار سيرفر العرض فائق الجودة.</p>
+              <h4>Connecting to EGYMAX VIP Stream...</h4>
+              <p>جارٍ فحص واستقرار سيرفر العرض المباشر فائق الجودة.</p>
             </div>
           ) : streamUrl && !streamFailed ? (
             <CinemaPlayer
@@ -160,49 +189,21 @@ export default function VideoPlayer({
           ) : (
             <div className={styles.directStreamNoticeBox}>
               <span className={styles.noticeStatusIcon}>📡</span>
-              <h3>سيرفر البث المباشر (VIP) قيد التجهيز</h3>
+              <h3>سيرفر EGYMAX قيد التجهيز</h3>
               <p>
-                لم يتم ربط البث المباشر لهذا الفيلم بعد أو قد تكون الخدمة تحت الصيانة.
-                يمكنك إعادة المحاولة أو التبديل فوراً إلى السيرفر البديل.
+                لم يتم ربط البث المباشر لهذا الفيلم بعد على مشغل EGYMAX.
+                يمكنك إعادة المحاولة أو الانتقال فوراً إلى Server 1 للمشاهدة.
               </p>
               <div className={styles.noticeActionButtons}>
                 <button type="button" onClick={handleRetry} className={styles.retryBtn}>
-                  🔄 إعادة المحاولة
+                  🔄 Retry EGYMAX
                 </button>
-                <button type="button" onClick={() => handleServerChange(2)} className={styles.switchMirrorBtn}>
-                  ⚡ التبديل إلى سيرفر بديل 1 (DoodStream Mirror)
+                <button type="button" onClick={() => handleServerChange(1)} className={styles.switchMirrorBtn}>
+                  ⚡ Switch to Server 1
                 </button>
               </div>
             </div>
           )
-        ) : activeServer === 2 && doodMirrorUrl ? (
-          /* Fallback Server 1: DoodStream Mirror */
-          <div className={styles.iframeWrapper}>
-            <iframe 
-              src={doodMirrorUrl} 
-              title={title || 'EGYMAX DoodStream Mirror'}
-              width="100%" 
-              height="100%" 
-              frameBorder="0" 
-              allowFullScreen 
-              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-              scrolling="no"
-            />
-          </div>
-        ) : activeServer === 3 && cdnMirrorUrl ? (
-          /* Fallback Server 2: CDN Embed */
-          <div className={styles.iframeWrapper}>
-            <iframe 
-              src={cdnMirrorUrl} 
-              title={title || 'EGYMAX CDN Mirror'}
-              width="100%" 
-              height="100%" 
-              frameBorder="0" 
-              allowFullScreen 
-              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-              scrolling="no"
-            />
-          </div>
         ) : embedHtml ? (
           <div 
             className={styles.iframeWrapper}
@@ -224,43 +225,44 @@ export default function VideoPlayer({
         <div className={styles.serverHeader}>
           <div className={styles.serverTitleGroup}>
             <span className={styles.serverTitle}>اختر سيرفر المشاهدة:</span>
-            {activeServer === 1 && streamUrl && !streamFailed && (
+            {activeServer === 3 && streamUrl && !streamFailed && (
               <span className={styles.vipTag}>VIP Ultra HD</span>
             )}
           </div>
           <span className={styles.serverHint}>يمكنك التبديل بين السيرفرات بحرية في أي وقت</span>
         </div>
 
+        {/* English-Only Button Labels */}
         <div className={styles.serverTabs}>
-          {/* Server 1: VIP Direct Cinema Player */}
+          {/* First Tab (Default Active): Server 1 */}
           <button 
             type="button"
             onClick={() => handleServerChange(1)} 
             className={`${styles.serverTab} ${activeServer === 1 ? styles.activeTab : ''}`}
           >
-            <span className={styles.tabIcon}>🔴</span>
-            <span>سيرفر EGYMAX السينمائي (VIP Direct)</span>
-            {isResolving && <span className={styles.tabLoading}>⏳</span>}
+            <span className={styles.tabIcon}>⚡</span>
+            <span>Server 1</span>
           </button>
           
-          {/* Server 2: DoodStream Mirror */}
+          {/* Second Tab: Server 2 */}
           <button 
             type="button"
             onClick={() => handleServerChange(2)} 
             className={`${styles.serverTab} ${activeServer === 2 ? styles.activeTab : ''}`}
           >
-            <span className={styles.tabIcon}>⚡</span>
-            <span>سيرفر بديل 1 (DoodStream Mirror)</span>
+            <span className={styles.tabIcon}>💾</span>
+            <span>Server 2</span>
           </button>
           
-          {/* Server 3: CDN Embed */}
+          {/* Third Tab (Last in list): EGYMAX VIP */}
           <button 
             type="button"
             onClick={() => handleServerChange(3)} 
             className={`${styles.serverTab} ${activeServer === 3 ? styles.activeTab : ''}`}
           >
-            <span className={styles.tabIcon}>💾</span>
-            <span>سيرفر بديل 2 (CDN Embed)</span>
+            <span className={styles.tabIcon}>🔴</span>
+            <span>EGYMAX</span>
+            {isResolving && <span className={styles.tabLoading}>⏳</span>}
           </button>
         </div>
       </div>
