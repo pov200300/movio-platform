@@ -62,6 +62,7 @@ DOODSTREAM_API_KEY = os.getenv("DOODSTREAM_API_KEY") or _COLAB_DOOD_KEY or ""
 DOODSTREAM_API_BASE = "https://doodapi.com/api"
 
 DOWNLOAD_DIR = "/content/download" if os.path.exists("/content") else os.path.abspath("./downloads")
+STAGING_DIR = "/content/staging" if os.path.exists("/content") else os.path.abspath("./staging_temp")
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -329,34 +330,64 @@ def fetch_yts_torrent(movie_title: str, release_year: str = None, imdb_id: str =
 # =============================================================================
 # 3. HIGH-SPEED DOWNLOAD (ARIA2C) & SANITIZATION
 # =============================================================================
-def sanitize_download_dir(download_dir: str = DOWNLOAD_DIR):
+def verify_video_integrity(video_path: str) -> bool:
     """
-    Sanitize download directory prior to calling aria2c:
-    Clear incomplete/stale .aria2 control files, partial downloads, and old chunks
-    to avoid CalledProcessError: exit status 13.
+    Run integrity check via ffprobe to verify the moov atom and stream readability.
+    Returns True if video is intact and playable, False if corrupted or truncated.
     """
-    if not os.path.exists(download_dir):
-        os.makedirs(download_dir, exist_ok=True)
-        return
+    if not video_path or not os.path.exists(video_path):
+        return False
+    if os.path.getsize(video_path) == 0:
+        return False
 
-    log("ARIA2", f"Sanitizing download directory: {download_dir}...")
-    stale_exts = (".aria2", ".part", ".tmp", ".crdownload")
-    for root, _, files in os.walk(download_dir):
-        for f in files:
-            if f.lower().endswith(stale_exts):
-                fpath = os.path.join(root, f)
-                try:
-                    os.remove(fpath)
-                    log("ARIA2", f"Cleared stale control/chunk file: {f}")
-                except Exception as e:
-                    log("ARIA2", f"Notice removing {f}: {e}")
+    ffprobe_bin = shutil.which("ffprobe") or "ffprobe"
+    probe_cmd = [
+        ffprobe_bin,
+        "-v", "error",
+        "-show_entries", "format=duration",
+        "-of", "default=noprint_wrappers=1:nokey=1",
+        video_path
+    ]
+    try:
+        proc = subprocess.run(probe_cmd, capture_output=True, text=True, timeout=25)
+        if proc.returncode != 0:
+            err_snippet = proc.stderr.strip() if proc.stderr else ""
+            log("INTEGRITY", f"❌ Video integrity check failed for {os.path.basename(video_path)}: {err_snippet}")
+            return False
 
-def download_with_aria2(torrent_source: str, download_dir: str = DOWNLOAD_DIR) -> str:
+        dur_str = proc.stdout.strip()
+        if not dur_str or dur_str == "N/A":
+            log("INTEGRITY", f"❌ Video reports invalid duration ('{dur_str}') for {os.path.basename(video_path)}")
+            return False
+
+        duration = float(dur_str)
+        if duration <= 0:
+            log("INTEGRITY", f"❌ Video reports non-positive duration ({duration}) for {os.path.basename(video_path)}")
+            return False
+
+        return True
+    except Exception as e:
+        log("INTEGRITY", f"Notice probing integrity of {os.path.basename(video_path)}: {e}")
+        return os.path.getsize(video_path) > (20 * 1024 * 1024)
+
+def sanitize_download_dir(download_dir: str = DOWNLOAD_DIR, staging_dir: str = STAGING_DIR):
+    """
+    Completely wipe and recreate download and staging directories before every run.
+    Guarantees no leftover partial .mp4 files or directories from prior runs contaminate current execution.
+    """
+    for d in [download_dir, staging_dir]:
+        if os.path.exists(d):
+            shutil.rmtree(d, ignore_errors=True)
+        os.makedirs(d, exist_ok=True)
+    log("ARIA2", f"Purged and reset clean working directories: {download_dir} & {staging_dir}")
+
+def download_with_aria2(torrent_source: str, download_dir: str = DOWNLOAD_DIR, staging_dir: str = STAGING_DIR) -> str:
     """
     Execute optimized aria2c download inside the cloud/Colab environment.
-    Sanitizes download directory and applies robust flags to prevent duplicate/status 13 errors.
+    Completely purges download and staging directories first, then verifies downloaded video integrity with ffprobe.
     """
-    sanitize_download_dir(download_dir)
+    # 1. Aggressive sanitization: wipe and recreate download & staging dirs
+    sanitize_download_dir(download_dir, staging_dir)
     log("ARIA2", f"Starting multi-connection download into {download_dir}...")
 
     cmd = [
@@ -379,13 +410,15 @@ def download_with_aria2(torrent_source: str, download_dir: str = DOWNLOAD_DIR) -
     if proc.returncode != 0:
         raise RuntimeError(f"aria2c download failed with exit code {proc.returncode}")
 
-    # Locate the largest downloaded video file
+    # 2. Locate downloaded video file strictly created during current run
     video_files = []
     for root, _, files in os.walk(download_dir):
         for f in files:
             if f.lower().endswith((".mp4", ".mkv", ".avi", ".webm")):
                 fpath = os.path.join(root, f)
-                video_files.append((fpath, os.path.getsize(fpath)))
+                sz = os.path.getsize(fpath)
+                if sz > 0:
+                    video_files.append((fpath, sz))
 
     if not video_files:
         raise FileNotFoundError(f"No video files found in {download_dir} after download.")
@@ -393,7 +426,13 @@ def download_with_aria2(torrent_source: str, download_dir: str = DOWNLOAD_DIR) -
     video_files.sort(key=lambda x: x[1], reverse=True)
     target_video = video_files[0][0]
     file_size_mb = video_files[0][1] / (1024 * 1024)
-    log("ARIA2", f"Download complete: {os.path.basename(target_video)} ({file_size_mb:.2f} MB)")
+
+    # 3. Integrity verification: check moov atom and container readability via ffprobe
+    log("ARIA2", f"Verifying container integrity of {os.path.basename(target_video)} ({file_size_mb:.2f} MB)...")
+    if not verify_video_integrity(target_video):
+        raise RuntimeError(f"Downloaded file is corrupted or incomplete; aborting upload. ({target_video})")
+
+    log("ARIA2", f"✅ Download verified intact: {os.path.basename(target_video)} ({file_size_mb:.2f} MB)")
     return target_video
 
 def decode_arabic_subtitle(raw_bytes: bytes) -> tuple:
@@ -650,6 +689,9 @@ def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
         log("HARDSUB", "Video path is invalid or missing.")
         return video_path
 
+    if not verify_video_integrity(video_path):
+        raise RuntimeError(f"Downloaded file is corrupted or incomplete; aborting upload. ({video_path})")
+
     if not srt_path or not os.path.exists(srt_path):
         log("HARDSUB", "No Arabic subtitle provided or file missing; using original video as fallback.")
         return video_path
@@ -777,12 +819,15 @@ def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
         if proc_cpu.returncode != 0:
             cpu_snippet = proc_cpu.stderr[-300:] if proc_cpu.stderr else ""
             log("HARDSUB", f"❌ CPU fallback failed ({proc_cpu.returncode}): {cpu_snippet}")
-            log("HARDSUB", "Falling back to original video file.")
             for p in [staged_input, staged_sub]:
                 if os.path.exists(p) or os.path.islink(p):
                     try: os.remove(p)
                     except Exception: pass
-            return video_path
+            if verify_video_integrity(video_path):
+                log("HARDSUB", "Falling back to intact original video file.")
+                return video_path
+            else:
+                raise RuntimeError(f"Downloaded file is corrupted or incomplete; aborting upload. ({video_path})")
 
     # Clean up staging input symlink and subtitle file
     for p in [staged_input, staged_sub]:
@@ -791,11 +836,19 @@ def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
             except Exception: pass
 
     if os.path.exists(staged_output) and os.path.getsize(staged_output) > 0:
-        file_size_mb = os.path.getsize(staged_output) / (1024 * 1024)
-        log("HARDSUB", f"✅ Hardsubbing complete! Video: {staged_output} ({file_size_mb:.1f} MB)")
-        return staged_output
+        if verify_video_integrity(staged_output):
+            file_size_mb = os.path.getsize(staged_output) / (1024 * 1024)
+            log("HARDSUB", f"✅ Hardsubbing complete and verified intact! Video: {staged_output} ({file_size_mb:.1f} MB)")
+            return staged_output
+        else:
+            log("HARDSUB", f"⚠️ Hardsubbed output failed integrity verification! Checking original video...")
+            if verify_video_integrity(video_path):
+                return video_path
+            raise RuntimeError(f"Downloaded file is corrupted or incomplete; aborting upload. ({video_path})")
 
-    return video_path
+    if verify_video_integrity(video_path):
+        return video_path
+    raise RuntimeError(f"Downloaded file is corrupted or incomplete; aborting upload. ({video_path})")
 
 # =============================================================================
 # 5. STREAMING HOST UPLOAD (DOODSTREAM API) WITH RESILIENCE & RETRIES
@@ -1132,6 +1185,8 @@ def run_pipeline(movie_title: str, release_year: str = None, imdb_id: str = None
     log("PIPELINE", f"Subtitling status: {arabic_sub_status}")
 
     # 6. Upload burned video to DoodStream with Retry & Server Re-allocation
+    if not verify_video_integrity(burned_video_path):
+        raise RuntimeError(f"Downloaded file is corrupted or incomplete; aborting upload. ({burned_video_path})")
     embed_url = upload_to_doodstream(burned_video_path)
 
     # 7. Publish directly to Pantheon WordPress (clean embed URL inside double-quoted iframe)
