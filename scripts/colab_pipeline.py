@@ -657,8 +657,118 @@ def upload_to_doodstream(video_path: str, api_key: str = DOODSTREAM_API_KEY, max
     raise RuntimeError(f"DoodStream upload failed after {max_retries} attempts. Last error: {last_error}")
 
 # =============================================================================
-# 5. HEADLESS WORDPRESS PUBLISHING (PANTHEON REST API)
+# 5. HEADLESS WORDPRESS PUBLISHING (PANTHEON REST API) & CATEGORIZATION
 # =============================================================================
+
+# Standard TMDB genre mapping to clean Arabic names and English slugs
+GENRE_MAP = {
+    "Action": ("أكشن", "action"),
+    "Adventure": ("مغامرة", "adventure"),
+    "Animation": ("رسوم متحركة", "animation"),
+    "Comedy": ("كوميديا", "comedy"),
+    "Crime": ("جريمة", "crime"),
+    "Documentary": ("وثائقي", "documentary"),
+    "Drama": ("دراما", "drama"),
+    "Family": ("عائلي", "family"),
+    "Fantasy": ("فانتازيا", "fantasy"),
+    "History": ("تاريخي", "history"),
+    "Horror": ("رعب", "horror"),
+    "Music": ("موسيقى", "music"),
+    "Mystery": ("غموض", "mystery"),
+    "Romance": ("رومانسي", "romance"),
+    "Science Fiction": ("خيال علمي", "sci-fi"),
+    "Thriller": ("إثارة", "thriller"),
+    "War": ("حرب", "war"),
+    "Western": ("غرب أمريكي", "western")
+}
+
+_WP_CATEGORIES_CACHE = {}
+
+def get_or_create_category(genre_name: str, wp_site_url: str = WP_SITE_URL, auth=None) -> int:
+    """
+    Look up or dynamically create a category for the given TMDB genre in WordPress.
+    Maps English genre to clean Arabic category name and English slug.
+    """
+    global _WP_CATEGORIES_CACHE
+    clean_genre = genre_name.strip()
+    if not clean_genre:
+        return None
+
+    if clean_genre in GENRE_MAP:
+        ar_name, en_slug = GENRE_MAP[clean_genre]
+    else:
+        ar_name = clean_genre
+        en_slug = re.sub(r'[^a-zA-Z0-9]+', '-', clean_genre.lower()).strip('-')
+
+    headers = {"User-Agent": HEADERS["User-Agent"]}
+    if wp_site_url not in _WP_CATEGORIES_CACHE:
+        try:
+            cat_res = requests.get(f"{wp_site_url}/wp-json/wp/v2/categories?per_page=100", headers=headers, auth=auth, timeout=20)
+            if cat_res.status_code == 200 and isinstance(cat_res.json(), list):
+                _WP_CATEGORIES_CACHE[wp_site_url] = cat_res.json()
+            else:
+                _WP_CATEGORIES_CACHE[wp_site_url] = []
+        except Exception as e:
+            log("WP", f"⚠️ Failed to fetch existing categories: {e}")
+            _WP_CATEGORIES_CACHE[wp_site_url] = []
+
+    existing_cats = _WP_CATEGORIES_CACHE[wp_site_url]
+
+    # 1. Search existing categories by name or slug
+    for cat in existing_cats:
+        c_name = cat.get("name", "").strip().lower()
+        c_slug = cat.get("slug", "").strip().lower()
+        if c_name == ar_name.lower() or c_name == clean_genre.lower() or c_slug == en_slug.lower():
+            return cat["id"]
+
+    # 2. Category not found: auto-create via POST /wp/v2/categories
+    create_url = f"{wp_site_url}/wp-json/wp/v2/categories"
+    create_payload = {
+        "name": ar_name,
+        "slug": en_slug,
+        "description": f"أفلام ومسلسلات تصنيف {ar_name}"
+    }
+    create_headers = {
+        "Content-Type": "application/json",
+        "User-Agent": HEADERS["User-Agent"]
+    }
+    try:
+        post_cat_res = requests.post(create_url, json=create_payload, headers=create_headers, auth=auth, timeout=20)
+        if post_cat_res.status_code in (200, 201):
+            created_cat = post_cat_res.json()
+            new_id = created_cat.get("id")
+            log("WP", f"➕ Auto-created new category: '{ar_name}' (ID: {new_id}, slug: '{en_slug}')")
+            existing_cats.append(created_cat)
+            return new_id
+        elif post_cat_res.status_code == 400 and "term_exists" in post_cat_res.text:
+            err_obj = post_cat_res.json()
+            existing_id = err_obj.get("data", {}).get("term_id")
+            if existing_id:
+                return existing_id
+        log("WP", f"⚠️ Notice creating category '{ar_name}' ({post_cat_res.status_code}): {post_cat_res.text[:120]}")
+    except Exception as e:
+        log("WP", f"⚠️ Error auto-creating category '{ar_name}': {e}")
+
+    return None
+
+def resolve_movie_categories(genres_raw, wp_site_url: str = WP_SITE_URL, auth=None) -> list:
+    """
+    Resolve raw genre string or list into WordPress category IDs with on-the-fly category creation.
+    """
+    if isinstance(genres_raw, str):
+        raw_list = [g.strip() for g in genres_raw.split(",") if g.strip()]
+    elif isinstance(genres_raw, list):
+        raw_list = [g.get("name", g) if isinstance(g, dict) else str(g).strip() for g in genres_raw]
+    else:
+        raw_list = []
+
+    category_ids = []
+    for genre in raw_list:
+        cid = get_or_create_category(genre, wp_site_url, auth)
+        if cid and cid not in category_ids:
+            category_ids.append(cid)
+    return category_ids
+
 def upload_poster_to_pantheon(image_url: str, title_slug: str, wp_site_url: str = WP_SITE_URL, username: str = WP_USERNAME, app_password: str = WP_APP_PASSWORD) -> int:
     """
     Download verified TMDB poster and upload to Pantheon WordPress Media Library.
@@ -693,7 +803,7 @@ def upload_poster_to_pantheon(image_url: str, title_slug: str, wp_site_url: str 
 
 def publish_movie_to_pantheon(meta: dict, embed_url: str, quality: str = "1080p", wp_site_url: str = WP_SITE_URL, username: str = WP_USERNAME, app_password: str = WP_APP_PASSWORD) -> dict:
     """
-    Publish movie post with 16:9 responsive embed player and full metadata
+    Publish movie post with 16:9 responsive embed player, linked category IDs, and full metadata
     into Pantheon Headless WordPress CMS.
     """
     clean_slug = re.sub(r'[^a-zA-Z0-9]+', '-', meta['title'].lower()).strip('-')
@@ -718,6 +828,13 @@ def publish_movie_to_pantheon(meta: dict, embed_url: str, quality: str = "1080p"
 </div>
 """
 
+    auth = HTTPBasicAuth(username, app_password) if app_password else None
+
+    # Resolve and auto-create WordPress categories
+    category_ids = resolve_movie_categories(meta.get("genres", ""), wp_site_url, auth)
+    if category_ids:
+        log("WP", f"Linked category IDs: {category_ids}")
+
     post_payload = {
         "title": title,
         "content": content,
@@ -732,6 +849,9 @@ def publish_movie_to_pantheon(meta: dict, embed_url: str, quality: str = "1080p"
             "genres": meta.get("genres", "")
         }
     }
+    if category_ids:
+        post_payload["categories"] = category_ids
+
     if media_id:
         post_payload["featured_media"] = media_id
 
@@ -740,7 +860,6 @@ def publish_movie_to_pantheon(meta: dict, embed_url: str, quality: str = "1080p"
         "Content-Type": "application/json",
         "User-Agent": HEADERS["User-Agent"]
     }
-    auth = HTTPBasicAuth(username, app_password) if app_password else None
 
     res = requests.post(api_endpoint, json=post_payload, headers=post_headers, auth=auth, timeout=30)
     if res.status_code in (200, 201):

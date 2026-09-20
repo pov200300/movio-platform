@@ -85,6 +85,16 @@
   border-radius: var(--radius-sm);
 }
 
+.badgeGenre {
+  background: rgba(229, 9, 20, 0.15);
+  border: 1px solid rgba(229, 9, 20, 0.5);
+  color: #ffffff;
+  font-size: 0.78rem;
+  font-weight: 800;
+  padding: 4px 12px;
+  border-radius: var(--radius-sm);
+}
+
 /* Movie Details Card */
 .movieDetailsCard {
   background: rgba(10, 14, 23, 0.8);
@@ -257,6 +267,31 @@
   font-weight: 800;
   padding: 3px 10px;
   border-radius: 4px;
+}
+
+.genreTagsList {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.tagGenre {
+  background: rgba(10, 14, 23, 0.9);
+  border: 1px solid rgba(229, 9, 20, 0.5);
+  color: #f8fafc;
+  font-size: 0.78rem;
+  font-weight: 700;
+  padding: 3px 9px;
+  border-radius: 4px;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+}
+
+.tagGenre:hover {
+  background: rgba(229, 9, 20, 0.2);
+  border-color: var(--accent-red);
+  color: #ffffff;
 }
 
 .synopsisBox {

@@ -134,6 +134,18 @@ export default async function MoviePage({ params }) {
                 <span className={styles.metaLabel}>سنة الإنتاج:</span>
                 <span className={styles.metaValue}>{movie.year}</span>
               </div>
+              {movie.genres && movie.genres.length > 0 && (
+                <div className={styles.metaItem}>
+                  <span className={styles.metaLabel}>التصنيف:</span>
+                  <div className={styles.genreTagsList}>
+                    {movie.genres.map((genre, idx) => (
+                      <span key={idx} className={styles.tagGenre}>
+                        {genre}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
               <div className={styles.metaItem}>
                 <span className={styles.metaLabel}>الجودة:</span>
                 <span className={styles.tagQuality}>{movie.quality}</span>
@@ -167,6 +179,9 @@ export default async function MoviePage({ params }) {
               مشاهدة فيلم <span dangerouslySetInnerHTML={{ __html: movie.displayTitle }} /> ({movie.year}) مترجم
             </h2>
             <div className={styles.theaterBadges}>
+              {movie.genres && movie.genres.length > 0 && (
+                <span className={styles.badgeGenre}>{movie.genres[0]}</span>
+              )}
               <span className={styles.badgeQuality}>{movie.quality}</span>
               <span className={styles.badgeSub}>مترجم بالعربية</span>
             </div>

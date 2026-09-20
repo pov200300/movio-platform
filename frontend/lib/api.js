@@ -116,6 +116,29 @@ export function getMovieEmbedUrl(post) {
   return null;
 }
 
+// Arabic translation map for TMDB genres
+export const GENRE_MAP_AR = {
+  Action: 'أكشن',
+  Adventure: 'مغامرة',
+  Animation: 'رسوم متحركة',
+  Comedy: 'كوميديا',
+  Crime: 'جريمة',
+  Documentary: 'وثائقي',
+  Drama: 'دراما',
+  Family: 'عائلي',
+  Fantasy: 'فانتازيا',
+  History: 'تاريخي',
+  Horror: 'رعب',
+  Music: 'موسيقى',
+  Mystery: 'غموض',
+  Romance: 'رومانسي',
+  'Science Fiction': 'خيال علمي',
+  'Sci-Fi': 'خيال علمي',
+  Thriller: 'إثارة',
+  War: 'حرب',
+  Western: 'غرب أمريكي',
+};
+
 /**
  * Parse all movie attributes with deep fallbacks across meta, title, and HTML content
  */
@@ -174,6 +197,38 @@ export function parseMovieData(post) {
     .replace(/<iframe.*?<\/iframe>/gis, '')
     .trim();
 
+  // 7. Extract Genres from embedded WordPress taxonomy, meta, or content
+  let genres = [];
+  if (post._embedded && post._embedded['wp:term'] && Array.isArray(post._embedded['wp:term'][0])) {
+    genres = post._embedded['wp:term'][0]
+      .map(t => t.name)
+      .filter(name => name && name.toLowerCase() !== 'uncategorized' && name !== 'غير مصنف');
+  }
+
+  if ((!genres || genres.length === 0) && post.meta?.genres) {
+    const rawList = Array.isArray(post.meta.genres)
+      ? post.meta.genres
+      : String(post.meta.genres).split(',');
+    genres = rawList
+      .map(g => g.trim())
+      .map(g => GENRE_MAP_AR[g] || g)
+      .filter(Boolean);
+  }
+
+  if (!genres || genres.length === 0) {
+    const genreMatch = content.match(/<strong>Genres:<\/strong>\s*([^<\n]+)/i);
+    if (genreMatch) {
+      genres = genreMatch[1]
+        .split(',')
+        .map(g => g.trim())
+        .map(g => GENRE_MAP_AR[g] || g)
+        .filter(Boolean);
+    }
+  }
+
+  // Deduplicate and ensure clean Arabic display
+  genres = Array.from(new Set(genres.map(g => GENRE_MAP_AR[g] || g)));
+
   return {
     id: post.id,
     slug: post.slug,
@@ -183,6 +238,7 @@ export function parseMovieData(post) {
     year,
     rating,
     quality,
+    genres,
     embedUrl,
     embed_url: embedUrl,
     downloadUrl,
