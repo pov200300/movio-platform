@@ -17,24 +17,23 @@ export default function MovieCard({ post, quality }) {
             src={movie.posterUrl}
             alt={movie.rawTitle}
             fill
-            sizes="(max-width: 640px) 33vw, (max-width: 1024px) 25vw, 14vw"
+            sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 16vw"
             className={styles.posterImage}
           />
           
           <div className={styles.gradientOverlay} />
-          <div className={styles.shimmerEffect} />
 
           {/* Top Right: Quality Badge */}
           <div className={styles.badgeTopRight}>
             <span className={styles.badgeQuality}>{displayQuality}</span>
           </div>
           
-          {/* Top Left: IMDB Rating */}
+          {/* Top Left: Gold Rating Badge */}
           <div className={styles.badgeTopLeft}>
             <span className={styles.badgeRating}>★ {movie.rating}</span>
           </div>
 
-          {/* Play Icon Glow */}
+          {/* Center Play Button Overlay on Hover */}
           <div className={styles.playIconOverlay}>
             <div className={styles.playBtn}>
               <svg viewBox="0 0 24 24" fill="currentColor">
@@ -43,11 +42,14 @@ export default function MovieCard({ post, quality }) {
             </div>
           </div>
 
-          {/* Bottom Title Box */}
-          <div className={styles.cardTitleBox}>
-            <div className={styles.subBadge}>مترجم</div>
+          {/* Bottom Card Title Box */}
+          <div className={styles.cardInfoBottom}>
+            <div className={styles.metaPills}>
+              <span className={styles.subPill}>مترجم</span>
+              <span className={styles.yearPill}>{movie.year}</span>
+            </div>
             <h3 className={styles.cardTitle}>
-              مشاهدة فيلم <span dangerouslySetInnerHTML={{ __html: movie.displayTitle }} /> ({movie.year})
+              <span dangerouslySetInnerHTML={{ __html: movie.displayTitle }} />
             </h3>
           </div>
         </div>

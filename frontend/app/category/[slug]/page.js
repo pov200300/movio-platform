@@ -1,4 +1,4 @@
-import { getLatestMovies, fetchAPI } from '../../../lib/api';
+import { fetchAPI } from '../../../lib/api';
 import MovieCard from '../../../components/MovieCard';
 import styles from './category.module.css';
 
@@ -7,13 +7,12 @@ export const revalidate = 0;
 
 // Dynamic metadata
 export async function generateMetadata({ params }) {
-  // Try to find the category name by fetching categories and matching the slug
   const categories = await fetchAPI('categories?hide_empty=true');
   const cat = categories?.find(c => c.slug === params.slug);
   
   return {
-    title: `${cat ? cat.name : 'Category'} Movies | CineVault`,
-    description: `Watch the best authorized ${cat ? cat.name : ''} movies online.`,
+    title: `أفلام قسم ${cat ? cat.name : 'التصنيف'} | EGYMAX`,
+    description: `شاهد أفضل وأحدث أفلام قسم ${cat ? cat.name : ''} مترجمة بجودة عالية على منصة EGYMAX.`,
   };
 }
 
@@ -23,8 +22,10 @@ export default async function CategoryPage({ params }) {
   
   if (!categories || categories.length === 0) {
     return (
-      <div className={styles.emptyState}>
-        <h2>Category Not Found</h2>
+      <div className="container" style={{ paddingTop: '3rem' }}>
+        <div className={styles.emptyState}>
+          <h2>التصنيف غير موجود</h2>
+        </div>
       </div>
     );
   }
@@ -32,14 +33,14 @@ export default async function CategoryPage({ params }) {
   const category = categories[0];
   
   // 2. Fetch posts in this category
-  const posts = await fetchAPI(`posts?categories=${category.id}&_embed&per_page=20`);
+  const posts = await fetchAPI(`posts?categories=${category.id}&_embed&per_page=30`);
 
   return (
-    <div className={styles.container}>
+    <div className="container" style={{ paddingTop: '2.5rem' }}>
       <header className={styles.header}>
-        <h1 className={styles.title}>{category.name} Movies</h1>
+        <h1 className={styles.title}>أفلام {category.name}</h1>
         <p className={styles.description}>
-          {category.description || `Browse our collection of authorized ${category.name} content.`}
+          {category.description || `تصفح أحدث ما تم إضافته في قسم ${category.name} على منصة EGYMAX.`}
         </p>
       </header>
 
@@ -51,7 +52,7 @@ export default async function CategoryPage({ params }) {
         </div>
       ) : (
         <div className={styles.emptyState}>
-          <h3>No movies currently available in this category.</h3>
+          <h3>لا توجد أفلام معروضة حالياً في هذا القسم.</h3>
         </div>
       )}
     </div>

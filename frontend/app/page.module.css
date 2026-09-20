@@ -1,101 +1,141 @@
 .section {
-  margin-bottom: 3rem;
+  margin-bottom: 3.5rem;
 }
 
 .sectionHeader {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  background: var(--bg-surface);
+  background: rgba(10, 14, 23, 0.7);
+  backdrop-filter: blur(12px);
   border: 1px solid var(--glass-border);
   border-right: 4px solid var(--accent-red);
-  padding: 0.75rem 1.25rem;
-  border-radius: 6px;
-  margin-bottom: 1.25rem;
+  padding: 0.85rem 1.35rem;
+  border-radius: var(--radius-md);
+  margin-bottom: 1.5rem;
 }
 
 .titleGroup {
   display: flex;
   align-items: center;
-  gap: 0.6rem;
+  gap: 0.75rem;
 }
 
-.pinIcon,
-.fireIcon {
-  font-size: 1.2rem;
+.iconPulse {
+  font-size: 1.3rem;
+  display: inline-block;
+  animation: gentlePulse 2s infinite ease-in-out;
 }
 
 .sectionTitle {
-  font-size: 1.25rem;
-  font-weight: 800;
+  font-size: 1.35rem;
+  font-weight: 900;
   color: #ffffff;
   letter-spacing: -0.3px;
 }
 
-.redBar {
-  display: none;
-}
-
 .viewAllBtn {
-  color: #94a3b8;
+  color: var(--text-sub);
   font-size: 0.95rem;
   font-weight: 700;
   text-decoration: none;
-  transition: color 0.2s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  transition: all 0.2s ease;
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+}
+
+.arrowIcon {
+  font-size: 1.1rem;
+  transition: transform 0.2s ease;
 }
 
 .viewAllBtn:hover {
   color: var(--accent-red);
 }
 
+.viewAllBtn:hover .arrowIcon {
+  transform: translateX(-3px);
+}
+
 .grid {
   display: grid;
-  grid-template-columns: repeat(7, 1fr);
-  gap: 10px;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 16px;
 }
 
 .emptyCard {
   background: var(--bg-surface);
   border: 1px dashed var(--glass-border);
-  border-radius: 8px;
-  padding: 4rem 2rem;
+  border-radius: var(--radius-lg);
+  padding: 5rem 2rem;
   text-align: center;
-  margin: 3rem 0;
+  margin: 4rem 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1rem;
+}
+
+.emptyIcon {
+  font-size: 3rem;
 }
 
 .emptyCard h2 {
-  font-size: 1.5rem;
+  font-size: 1.6rem;
   font-weight: 800;
   color: #ffffff;
-  margin-bottom: 0.5rem;
 }
 
 .emptyCard p {
-  color: #94a3b8;
+  color: var(--text-sub);
+  max-width: 480px;
+  line-height: 1.6;
 }
 
-@media (max-width: 1300px) {
+@keyframes gentlePulse {
+  0%, 100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.15);
+  }
+}
+
+@media (max-width: 1280px) {
   .grid {
-    grid-template-columns: repeat(6, 1fr);
+    grid-template-columns: repeat(5, 1fr);
+    gap: 14px;
   }
 }
 
 @media (max-width: 1024px) {
   .grid {
-    grid-template-columns: repeat(5, 1fr);
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
   }
 }
 
 @media (max-width: 768px) {
   .grid {
-    grid-template-columns: repeat(4, 1fr);
-    gap: 8px;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 10px;
+  }
+
+  .sectionHeader {
+    padding: 0.75rem 1rem;
+  }
+
+  .sectionTitle {
+    font-size: 1.15rem;
   }
 }
 
 @media (max-width: 480px) {
   .grid {
-    grid-template-columns: repeat(3, 1fr);
-    gap: 6px;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
   }
 }

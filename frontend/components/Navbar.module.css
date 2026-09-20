@@ -1,33 +1,37 @@
-.headerStack {
+.header {
   position: sticky;
   top: 0;
   left: 0;
   width: 100%;
   z-index: 1000;
-  box-shadow: 0 6px 30px rgba(0, 0, 0, 0.6);
+  background: rgba(5, 7, 12, 0.85);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  transition: all 0.3s ease;
 }
 
-.topBar {
-  height: 62px;
-  background: var(--bg-surface);
-  border-bottom: 1px solid var(--glass-border);
+.headerScrolled {
+  background: rgba(5, 7, 12, 0.95);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.7);
+  border-bottom-color: rgba(229, 9, 20, 0.2);
 }
 
-.container {
+.navContainer {
   max-width: var(--max-width);
-  height: 100%;
+  height: 68px;
   margin: 0 auto;
   padding: 0 1.25rem;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 1.5rem;
+  gap: 2rem;
 }
 
-.brandGroup {
+.navRight {
   display: flex;
   align-items: center;
-  gap: 1rem;
+  gap: 2rem;
 }
 
 .mobileToggle {
@@ -36,148 +40,236 @@
   border: none;
   color: var(--text-main);
   cursor: pointer;
+  padding: 4px;
 }
 
 .mobileToggle svg {
-  width: 24px;
-  height: 24px;
+  width: 26px;
+  height: 26px;
 }
 
 .logo {
-  font-size: 1.5rem;
+  font-size: 1.85rem;
   font-weight: 900;
-  color: #ffffff;
+  letter-spacing: 1.5px;
   text-decoration: none;
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 6px;
-  letter-spacing: -0.5px;
+  transition: transform 0.2s ease;
+}
+
+.logo:hover {
+  transform: scale(1.03);
 }
 
 .logoRed {
   color: var(--accent-red);
+  text-shadow: 0 0 16px var(--accent-red-glow);
 }
 
-.logoBadge {
-  background: var(--accent-red);
+.logoWhite {
   color: #ffffff;
-  font-size: 0.65rem;
-  font-weight: 800;
-  padding: 2px 6px;
-  border-radius: 3px;
 }
 
-.searchBox {
-  flex: 0 1 340px;
+.desktopNav {
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+}
+
+.navLink {
+  color: var(--text-sub);
+  text-decoration: none;
+  font-size: 0.95rem;
+  font-weight: 700;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  transition: all 0.2s ease;
+  position: relative;
+}
+
+.navLink:hover {
+  color: #ffffff;
+}
+
+.navLinkActive {
+  color: var(--accent-red) !important;
+}
+
+.navLinkActive::after {
+  content: '';
+  position: absolute;
+  bottom: -2px;
+  right: 10px;
+  left: 10px;
+  height: 2px;
+  background: var(--accent-red);
+  border-radius: 2px;
+  box-shadow: 0 0 8px var(--accent-red-glow);
+}
+
+.navLeft {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
 }
 
 .searchForm {
   display: flex;
   align-items: center;
-  background: var(--bg-dark);
+  background: rgba(16, 21, 34, 0.8);
   border: 1px solid var(--glass-border);
-  border-radius: 6px;
-  overflow: hidden;
-  transition: border-color 0.2s ease;
+  border-radius: var(--radius-full);
+  padding: 2px 4px 2px 14px;
+  width: 280px;
+  transition: all 0.25s ease;
 }
 
 .searchForm:focus-within {
+  width: 330px;
   border-color: var(--accent-red);
-  box-shadow: 0 0 12px var(--accent-red-glow);
+  box-shadow: 0 0 15px var(--accent-red-glow);
+  background: rgba(16, 21, 34, 1);
 }
 
 .searchInput {
   flex: 1;
-  height: 36px;
-  padding: 0 0.85rem;
+  height: 38px;
   background: transparent;
   border: none;
   color: #ffffff;
   font-family: var(--font-main);
-  font-size: 0.82rem;
+  font-size: 0.88rem;
   outline: none;
 }
 
+.searchInput::placeholder {
+  color: var(--text-muted);
+}
+
 .searchBtn {
-  width: 40px;
-  height: 36px;
-  background: #161e2e;
+  width: 34px;
+  height: 34px;
+  border-radius: var(--radius-full);
+  background: var(--accent-red);
   border: none;
-  color: #94a3b8;
+  color: #ffffff;
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  transition: background 0.2s ease, color 0.2s ease;
+  transition: background 0.2s ease, transform 0.15s ease;
 }
 
 .searchBtn:hover {
-  background: var(--accent-red);
-  color: #ffffff;
+  background: var(--accent-red-hover);
+  transform: scale(1.05);
 }
 
 .searchBtn svg {
-  width: 16px;
-  height: 16px;
+  width: 17px;
+  height: 17px;
 }
 
-.subNavBar {
-  background: #090d16;
-  border-bottom: 1px solid var(--glass-border);
-  height: 42px;
-}
-
-.subNavList {
-  display: flex;
-  align-items: center;
-  gap: 1.5rem;
-  list-style: none;
-  overflow-x: auto;
-  white-space: nowrap;
-}
-
-.subNavList::-webkit-scrollbar {
+/* Mobile Drawer */
+.mobileDrawer {
   display: none;
 }
 
-.subNavList a {
-  color: #94a3b8;
-  font-size: 0.84rem;
-  font-weight: 700;
-  text-decoration: none;
-  padding: 0.6rem 0;
-  transition: color 0.2s ease;
-  display: inline-block;
-}
-
-.activeItem,
-.subNavList a:hover {
-  color: var(--accent-red) !important;
-}
-
-@media (max-width: 768px) {
-  .mobileToggle {
-    display: block;
-  }
-
-  .subNavBar {
+@media (max-width: 900px) {
+  .desktopNav {
     display: none;
   }
 
-  .subNavBarOpen {
+  .mobileToggle {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .navLeft .searchForm {
+    display: none;
+  }
+
+  .mobileDrawer {
     display: block;
-    height: auto;
-    padding: 0.75rem 0;
+    background: rgba(8, 11, 18, 0.98);
+    border-top: 1px solid var(--glass-border);
+    padding: 1.25rem;
+    animation: slideDown 0.25s ease;
   }
 
-  .subNavList {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 0.75rem;
+  .mobileSearchForm {
+    display: flex;
+    align-items: center;
+    background: rgba(16, 21, 34, 0.9);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-md);
+    padding: 4px 8px;
+    margin-bottom: 1.25rem;
   }
 
-  .searchBox {
+  .mobileSearchInput {
     flex: 1;
-    max-width: 180px;
+    height: 40px;
+    background: transparent;
+    border: none;
+    color: #ffffff;
+    font-family: var(--font-main);
+    font-size: 0.92rem;
+    padding: 0 8px;
+    outline: none;
+  }
+
+  .mobileSearchBtn {
+    width: 36px;
+    height: 36px;
+    background: var(--accent-red);
+    border: none;
+    border-radius: var(--radius-sm);
+    color: #ffffff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .mobileSearchBtn svg {
+    width: 18px;
+    height: 18px;
+  }
+
+  .mobileNavList {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .mobileNavList a {
+    display: block;
+    padding: 10px 14px;
+    color: var(--text-sub);
+    text-decoration: none;
+    font-size: 1rem;
+    font-weight: 700;
+    border-radius: var(--radius-sm);
+    transition: all 0.2s ease;
+  }
+
+  .mobileNavList a:hover,
+  .mobileActive {
+    background: rgba(229, 9, 20, 0.15);
+    color: var(--accent-red) !important;
+  }
+}
+
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
   }
 }

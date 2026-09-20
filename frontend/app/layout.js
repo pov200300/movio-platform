@@ -1,27 +1,27 @@
 import './globals.css';
 import Navbar from '../components/Navbar';
+import Footer from '../components/Footer';
 
 export const metadata = {
-  title: 'CineVault | Premium Authorized Streaming',
-  description: 'Stream legally licensed movies, documentaries, and public domain media in full HD.',
+  title: 'EGYMAX | بوابة المشاهدة الأولى للأفلام والمسلسلات الحصرية',
+  description: 'شاهد وحمل أحدث الأفلام والمسلسلات العربية والأجنبية المترجمة بجودة 4K و 1080p مجاناً على سيرفرات سريعة وبدون إعلانات مزعجة.',
+  keywords: 'ايجي ماكس, EGYMAX, افلام 2026, افلام مترجمة, مشاهدة افلام اون لاين, افلام عربي, افلام اكشن, افلام نتفلكس',
+  viewport: 'width=device-width, initial-scale=1, maximum-scale=1',
 };
 
 export default function RootLayout({ children }) {
   return (
-    <html lang="en">
+    <html lang="ar" dir="rtl">
+      <head>
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
+      </head>
       <body>
         <Navbar />
         <main className="main-content">
           {children}
         </main>
-        <footer className="footer">
-          <div className="container">
-            <p>© {new Date().getFullYear()} CineVault Platform. All rights reserved.</p>
-            <p style={{ fontSize: '0.8rem', marginTop: '0.4rem', opacity: 0.7 }}>
-              Legal Compliance Notice: All video streams hosted via this portal are strictly public domain or legally authorized content.
-            </p>
-          </div>
-        </footer>
+        <Footer />
       </body>
     </html>
   );
