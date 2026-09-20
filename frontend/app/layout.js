@@ -6,7 +6,12 @@ export const metadata = {
   title: 'EGYMAX | بوابة المشاهدة الأولى للأفلام والمسلسلات الحصرية',
   description: 'شاهد وحمل أحدث الأفلام والمسلسلات العربية والأجنبية المترجمة بجودة 4K و 1080p مجاناً على سيرفرات سريعة وبدون إعلانات مزعجة.',
   keywords: 'ايجي ماكس, EGYMAX, افلام 2026, افلام مترجمة, مشاهدة افلام اون لاين, افلام عربي, افلام اكشن, افلام نتفلكس',
-  viewport: 'width=device-width, initial-scale=1, maximum-scale=1',
+};
+
+export const viewport = {
+  width: 'device-width',
+  initialScale: 1,
+  maximumScale: 1,
 };
 
 export default function RootLayout({ children }) {
