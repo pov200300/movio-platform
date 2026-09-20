@@ -35,75 +35,83 @@ export default function VideoPlayer({
     cdnMirrorUrl = rawUrl.replace('doodstream.com', 'dood.so').replace('dood.to', 'dood.so');
   }
 
-  // Attempt resolving direct stream when VIP server is active
-  useEffect(() => {
-    let isCancelled = false;
-
-    async function resolveStream() {
-      if (directStreamUrl) {
-        setStreamUrl(directStreamUrl);
-        return;
-      }
-
-      if (!slug) return;
-
-      setIsResolving(true);
-      try {
-        const res = await fetch(`/api/stream/${slug}${embedUrl ? `?url=${encodeURIComponent(embedUrl)}` : ''}`);
-        if (res.ok) {
-          const data = await res.json();
-          if (data.success && data.streamUrl && !isCancelled) {
-            setStreamUrl(data.streamUrl);
-            setStreamFailed(false);
-            return;
-          }
-        }
-      } catch (err) {
-        console.warn('Could not resolve direct stream link:', err);
-      } finally {
-        if (!isCancelled) setIsResolving(false);
-      }
-
-      // If direct stream resolution failed, fallback to DoodStream mirror
-      if (!isCancelled) {
-        setStreamFailed(true);
-        setActiveServer(2); // Auto-switch to DoodStream mirror
-      }
+  // Function to resolve direct stream link without switching tabs
+  const resolveStream = useCallback(async () => {
+    if (directStreamUrl) {
+      setStreamUrl(directStreamUrl);
+      setStreamFailed(false);
+      return;
     }
 
-    if (activeServer === 1 && !streamUrl) {
+    if (!slug) {
+      setStreamFailed(true);
+      return;
+    }
+
+    setIsResolving(true);
+    setStreamFailed(false);
+
+    try {
+      const res = await fetch(`/api/stream/${slug}${embedUrl ? `?url=${encodeURIComponent(embedUrl)}` : ''}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data?.success && data?.streamUrl) {
+          setStreamUrl(data.streamUrl);
+          setStreamFailed(false);
+          setIsResolving(false);
+          return;
+        }
+      }
+    } catch (err) {
+      console.warn('Could not resolve direct stream link:', err);
+    } finally {
+      setIsResolving(false);
+    }
+
+    // Set error state, but strictly KEEP activeServer at 1 (NO auto-switching)
+    setStreamFailed(true);
+  }, [slug, embedUrl, directStreamUrl]);
+
+  // Attempt stream resolution when user activates Server 1
+  useEffect(() => {
+    if (activeServer === 1 && !streamUrl && !streamFailed && isPlaying) {
       resolveStream();
     }
+  }, [activeServer, streamUrl, streamFailed, isPlaying, resolveStream]);
 
-    return () => {
-      isCancelled = true;
-    };
-  }, [slug, embedUrl, directStreamUrl, activeServer, streamUrl]);
-
-  // Fallback handler when stream errors out during playback
+  // Fallback handler when stream playback errors out inside Artplayer
   const handleCinemaError = useCallback(() => {
-    console.warn('Direct stream error encountered, switching to fallback embed.');
+    console.warn('Direct stream playback error in CinemaPlayer.');
     setStreamFailed(true);
-    setActiveServer(2); // Switch to DoodStream Mirror
   }, []);
 
   const handlePlayClick = () => {
     setIsPlaying(true);
+    if (activeServer === 1 && !streamUrl && !streamFailed) {
+      resolveStream();
+    }
   };
 
   const handleServerChange = (serverNum) => {
     setActiveServer(serverNum);
     setIsPlaying(true);
-    if (serverNum === 1 && streamFailed && !streamUrl) {
-      setStreamFailed(false);
+    if (serverNum === 1 && (streamFailed || !streamUrl)) {
+      resolveStream();
     }
+  };
+
+  const handleRetry = () => {
+    setStreamUrl(null);
+    setStreamFailed(false);
+    resolveStream();
   };
 
   return (
     <div className={`${styles.playerWrapper} ${isTheater ? styles.playerWrapperTheater : ''}`}>
-      {/* 16:9 Responsive Theater Frame */}
+      {/* 16:9 Responsive Player Frame */}
       <div className={styles.playerContainer}>
         {!isPlaying ? (
+          /* Pre-Playback Poster Overlay */
           <div className={styles.overlay} onClick={handlePlayClick}>
             {posterUrl && posterUrl !== '/placeholder.jpg' && (
               <Image 
@@ -132,16 +140,41 @@ export default function VideoPlayer({
               <p className={styles.playText}>انقر هنا لبدء المشاهدة السينمائية الفائقة</p>
             </div>
           </div>
-        ) : activeServer === 1 && streamUrl && !streamFailed ? (
-          /* Custom EGYMAX Cinema Player */
-          <CinemaPlayer
-            url={streamUrl}
-            poster={posterUrl}
-            title={title}
-            isTheater={isTheater}
-            onTheaterToggle={() => setIsTheater((prev) => !prev)}
-            onError={handleCinemaError}
-          />
+        ) : activeServer === 1 ? (
+          /* Server 1: VIP Direct Cinema Player or Inline Status/Retry Box */
+          isResolving ? (
+            <div className={styles.loaderBox}>
+              <div className={styles.cinemaSpinner} />
+              <h4>جارٍ الاتصال بسيرفر البث المباشر (VIP)...</h4>
+              <p>يتم فحص سرعة واستقرار سيرفر العرض فائق الجودة.</p>
+            </div>
+          ) : streamUrl && !streamFailed ? (
+            <CinemaPlayer
+              url={streamUrl}
+              poster={posterUrl}
+              title={title}
+              isTheater={isTheater}
+              onTheaterToggle={() => setIsTheater((prev) => !prev)}
+              onError={handleCinemaError}
+            />
+          ) : (
+            <div className={styles.directStreamNoticeBox}>
+              <span className={styles.noticeStatusIcon}>📡</span>
+              <h3>سيرفر البث المباشر (VIP) قيد التجهيز</h3>
+              <p>
+                لم يتم ربط البث المباشر لهذا الفيلم بعد أو قد تكون الخدمة تحت الصيانة.
+                يمكنك إعادة المحاولة أو التبديل فوراً إلى السيرفر البديل.
+              </p>
+              <div className={styles.noticeActionButtons}>
+                <button type="button" onClick={handleRetry} className={styles.retryBtn}>
+                  🔄 إعادة المحاولة
+                </button>
+                <button type="button" onClick={() => handleServerChange(2)} className={styles.switchMirrorBtn}>
+                  ⚡ التبديل إلى سيرفر بديل 1 (DoodStream Mirror)
+                </button>
+              </div>
+            </div>
+          )
         ) : activeServer === 2 && doodMirrorUrl ? (
           /* Fallback Server 1: DoodStream Mirror */
           <div className={styles.iframeWrapper}>
@@ -195,7 +228,7 @@ export default function VideoPlayer({
               <span className={styles.vipTag}>VIP Ultra HD</span>
             )}
           </div>
-          <span className={styles.serverHint}>إذا توقف سيرفر، قم بالتبديل إلى سيرفر آخر فوراً</span>
+          <span className={styles.serverHint}>يمكنك التبديل بين السيرفرات بحرية في أي وقت</span>
         </div>
 
         <div className={styles.serverTabs}>

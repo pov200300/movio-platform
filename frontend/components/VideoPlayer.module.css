@@ -162,6 +162,146 @@
   max-width: 400px;
 }
 
+/* VIP Stream Loader Box */
+.loaderBox {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(circle at center, rgba(16, 21, 34, 0.95) 0%, rgba(5, 7, 12, 1) 100%);
+  padding: 2rem;
+  text-align: center;
+  gap: 1rem;
+}
+
+.cinemaSpinner {
+  width: 44px;
+  height: 44px;
+  border: 3px solid rgba(229, 9, 20, 0.2);
+  border-top-color: var(--accent-red);
+  border-radius: 50%;
+  animation: cinemaSpin 0.8s linear infinite;
+  box-shadow: 0 0 15px var(--accent-red-glow);
+}
+
+@keyframes cinemaSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.loaderBox h4 {
+  color: #ffffff;
+  font-size: 1.25rem;
+  font-weight: 800;
+}
+
+.loaderBox p {
+  color: var(--text-sub);
+  font-size: 0.9rem;
+}
+
+/* Direct Stream Notice Box (No Aggressive Redirect) */
+.directStreamNoticeBox {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(circle at center, rgba(16, 21, 34, 0.95) 0%, rgba(5, 7, 12, 1) 100%);
+  padding: 2.5rem 1.5rem;
+  text-align: center;
+  gap: 1rem;
+}
+
+.noticeStatusIcon {
+  font-size: 2.8rem;
+  animation: pulseIcon 2s infinite ease-in-out;
+}
+
+@keyframes pulseIcon {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 0.8;
+  }
+  50% {
+    transform: scale(1.1);
+    opacity: 1;
+  }
+}
+
+.directStreamNoticeBox h3 {
+  color: #ffffff;
+  font-size: 1.35rem;
+  font-weight: 900;
+}
+
+.directStreamNoticeBox p {
+  color: var(--text-sub);
+  font-size: 0.95rem;
+  max-width: 520px;
+  line-height: 1.6;
+}
+
+.noticeActionButtons {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  margin-top: 0.5rem;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.retryBtn {
+  background: var(--accent-red-gradient);
+  color: #ffffff;
+  border: none;
+  font-family: var(--font-main);
+  font-size: 0.95rem;
+  font-weight: 800;
+  padding: 0.75rem 1.5rem;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  box-shadow: 0 4px 15px var(--accent-red-glow);
+  transition: all 0.2s ease;
+}
+
+.retryBtn:hover {
+  background: linear-gradient(135deg, var(--accent-red-hover) 0%, #b81d24 100%);
+  transform: translateY(-2px);
+  box-shadow: 0 8px 20px rgba(229, 9, 20, 0.6);
+}
+
+.switchMirrorBtn {
+  background: rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: #ffffff;
+  font-family: var(--font-main);
+  font-size: 0.92rem;
+  font-weight: 700;
+  padding: 0.75rem 1.4rem;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  transition: all 0.2s ease;
+}
+
+.switchMirrorBtn:hover {
+  background: rgba(255, 255, 255, 0.16);
+  border-color: var(--accent-gold);
+  color: var(--accent-gold);
+  transform: translateY(-2px);
+}
+
 /* Server Selection Section */
 .serverSection {
   background: rgba(10, 14, 23, 0.85);
