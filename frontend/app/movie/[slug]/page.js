@@ -81,28 +81,7 @@ export default async function MoviePage({ params }) {
           <span className={styles.breadcrumbCurrent}>{movie.displayTitle}</span>
         </nav>
 
-        {/* Theater Player Area */}
-        <section id="player" className={styles.theaterSection}>
-          <div className={styles.theaterHeader}>
-            <h1 className={styles.playerTitle}>
-              مشاهدة فيلم <span dangerouslySetInnerHTML={{ __html: movie.displayTitle }} /> ({movie.year}) مترجم
-            </h1>
-            <div className={styles.theaterBadges}>
-              <span className={styles.badgeQuality}>{movie.quality}</span>
-              <span className={styles.badgeSub}>مترجم بالعربية</span>
-            </div>
-          </div>
-
-          <VideoPlayer 
-            slug={params.slug}
-            embedUrl={movie.embedUrl}
-            directStreamUrl={movie.directStreamUrl}
-            posterUrl={movie.posterUrl} 
-            title={movie.rawTitle} 
-          />
-        </section>
-
-        {/* Detailed Metadata & Synopsis Card */}
+        {/* Top Section: Detailed Metadata & Synopsis Card */}
         <section className={styles.movieDetailsCard}>
           <div className={styles.posterCol}>
             <div className={styles.posterWrapper}>
@@ -118,7 +97,7 @@ export default async function MoviePage({ params }) {
             </div>
 
             <div className={styles.posterActions}>
-              <a href="#player" className={styles.actionBtnPlay}>
+              <a href="#player-section" className={styles.actionBtnPlay}>
                 ▶ تشغيل الفيلم
               </a>
               {downloadUrl ? (
@@ -142,9 +121,9 @@ export default async function MoviePage({ params }) {
           </div>
 
           <div className={styles.infoCol}>
-            <h2 className={styles.infoTitle}>
+            <h1 className={styles.infoTitle}>
               تفاصيل فيلم <span dangerouslySetInnerHTML={{ __html: movie.displayTitle }} /> ({movie.year})
-            </h2>
+            </h1>
 
             <div className={styles.metaRow}>
               <div className={styles.metaItem}>
@@ -179,6 +158,27 @@ export default async function MoviePage({ params }) {
               </p>
             </div>
           </div>
+        </section>
+
+        {/* Middle Section: Theater Video Player */}
+        <section id="player-section" className={styles.theaterSection}>
+          <div className={styles.theaterHeader}>
+            <h2 className={styles.playerTitle}>
+              مشاهدة فيلم <span dangerouslySetInnerHTML={{ __html: movie.displayTitle }} /> ({movie.year}) مترجم
+            </h2>
+            <div className={styles.theaterBadges}>
+              <span className={styles.badgeQuality}>{movie.quality}</span>
+              <span className={styles.badgeSub}>مترجم بالعربية</span>
+            </div>
+          </div>
+
+          <VideoPlayer 
+            slug={params.slug}
+            embedUrl={movie.embedUrl}
+            directStreamUrl={movie.directStreamUrl}
+            posterUrl={movie.posterUrl} 
+            title={movie.rawTitle} 
+          />
         </section>
 
         {/* Related Movies Section */}

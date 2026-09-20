@@ -36,6 +36,8 @@
 
 /* Theater Player Section */
 .theaterSection {
+  margin-top: 2rem;
+  scroll-margin-top: 90px;
   display: flex;
   flex-direction: column;
   gap: 1.25rem;
