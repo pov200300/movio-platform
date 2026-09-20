@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Movio Platform — Production Automation Pipeline
+EGYMAX Platform — Production Automation Pipeline
 ================================================
 Decoupled Cloud Ingestion Worker:
 1. TMDB API: Verified high-res metadata, poster (original), backdrop & rating.
@@ -708,7 +708,7 @@ def run_pipeline(movie_title: str, release_year: str = None, imdb_id: str = None
     -> FFmpeg Hardsubbing (*_subbed.mp4) -> Resilient DoodStream Upload -> Pantheon Headless WP
     """
     print("=" * 75)
-    print("  MOVIO CLOUD AUTOMATION PIPELINE (TMDB + YTS + ARIA2C + ARABIC HARDSUB + PANTHEON)")
+    print("  EGYMAX CLOUD AUTOMATION PIPELINE (TMDB + YTS + ARABIC HARDSUB + PANTHEON)")
     print("=" * 75)
 
     # 1. Fetch TMDB Metadata

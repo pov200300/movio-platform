@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Generates the Google Colab Notebook (.ipynb) for the production Movio automation pipeline.
+Generates the Google Colab Notebook (.ipynb) for the production EGYMAX automation pipeline.
 Includes:
 - Arabic-only subtitle engine fetching highest-rated Arabic (.srt) subtitle
 - FFmpeg hardsubbing function burning Arabic subtitles directly into .mp4 frames
@@ -36,7 +36,7 @@ notebook = {
             "cell_type": "markdown",
             "metadata": {},
             "source": [
-                "# 🎬 Movio Platform — Automated Cloud Ingestion Pipeline (Google Colab)\n",
+                "# 🎬 EGYMAX Platform — Automated Cloud Ingestion Pipeline (Google Colab)\n",
                 "**Production Cloud Pipeline for Headless WordPress (Pantheon) & Next.js**\n",
                 "\n",
                 "- **TMDB API**: High-resolution official metadata, poster, backdrop, rating, and synopsis.\n",
@@ -616,7 +616,7 @@ notebook = {
                 "\n",
                 "def run_pipeline(title, year=None, imdb=None, quality=\"1080p\"):\n",
                 "    print(\"=\" * 75)\n",
-                "    print(\"  MOVIO CLOUD AUTOMATION PIPELINE (TMDB + YTS + ARIA2C + ARABIC HARDSUB + PANTHEON)\")\n",
+                "    print(\"  EGYMAX CLOUD AUTOMATION PIPELINE (TMDB + YTS + ARABIC HARDSUB + PANTHEON)\")\n",
                 "    print(\"=\" * 75)\n",
                 "    # 1. Acquire TMDB metadata & YTS torrent\n",
                 "    meta = fetch_tmdb_metadata(title.strip(), year.strip() if year else None, imdb.strip() if imdb else None)\n",
