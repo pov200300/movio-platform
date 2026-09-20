@@ -575,11 +575,74 @@ def download_subtitles_for_imdb(imdb_id: str, output_dir: str = DOWNLOAD_DIR) ->
     log("SUBS", f"Failed downloading or verifying Arabic subtitle for {imdb_id}.")
     return None
 
+def probe_video_properties(video_path: str) -> tuple[int, float]:
+    """
+    Probe video properties using ffprobe to extract source video bitrate (bps) and duration (seconds).
+    Falls back to calculating bitrate from file size and duration if not directly reported in streams/format.
+    """
+    source_bitrate = 0
+    duration = 0.0
+    file_size_bytes = os.path.getsize(video_path) if os.path.exists(video_path) else 0
+
+    ffprobe_bin = shutil.which("ffprobe") or "ffprobe"
+    try:
+        probe_cmd = [
+            ffprobe_bin, "-v", "error",
+            "-select_streams", "v:0",
+            "-show_entries", "stream=bit_rate,duration:format=bit_rate,duration",
+            "-of", "json",
+            video_path
+        ]
+        proc = subprocess.run(probe_cmd, capture_output=True, text=True, timeout=20)
+        if proc.returncode == 0 and proc.stdout:
+            data = json.loads(proc.stdout)
+            streams = data.get("streams", [])
+            fmt = data.get("format", {})
+
+            # Extract duration: stream first, then format
+            if streams and streams[0].get("duration") not in (None, "N/A"):
+                try:
+                    duration = float(streams[0]["duration"])
+                except (ValueError, TypeError):
+                    pass
+            if duration <= 0 and fmt.get("duration") not in (None, "N/A"):
+                try:
+                    duration = float(fmt["duration"])
+                except (ValueError, TypeError):
+                    pass
+
+            # Extract bitrate: stream first, then format
+            if streams and streams[0].get("bit_rate") not in (None, "N/A"):
+                try:
+                    source_bitrate = int(float(streams[0]["bit_rate"]))
+                except (ValueError, TypeError):
+                    pass
+            if source_bitrate <= 0 and fmt.get("bit_rate") not in (None, "N/A"):
+                try:
+                    source_bitrate = int(float(fmt["bit_rate"]))
+                except (ValueError, TypeError):
+                    pass
+    except Exception as e:
+        log("HARDSUB", f"ffprobe notice: {e}")
+
+    # Fallback: calculate bitrate from file size and duration
+    if source_bitrate <= 0 and duration > 0 and file_size_bytes > 0:
+        source_bitrate = int((file_size_bytes * 8) / duration)
+
+    # Safe defaults if probe could not determine properties
+    if source_bitrate <= 0:
+        source_bitrate = 2_500_000  # Default ~2.5 Mbps
+    if duration <= 0:
+        duration = 7200.0  # Default ~2 hours
+
+    return source_bitrate, duration
+
 def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
     """
     Burn Arabic subtitles directly into video frames (hardsubbing) using FFmpeg.
     Enforces clean UTF-8 encoding (prioritizing windows-1256/cp1256 conversion before latin1),
-    sanitizes paths, and runs FFmpeg from the subtitle directory to avoid filtergraph path escaping failures.
+    sanitizes paths, executes FFmpeg from a flat staging directory, and dynamically controls
+    bitrate with NVENC p6/cq20 to prevent file bloat while maintaining visually lossless quality.
     """
     if not video_path or not os.path.exists(video_path):
         log("HARDSUB", "Video path is invalid or missing.")
@@ -651,35 +714,54 @@ def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
     force_style = "Alignment=2,MarginV=20,FontSize=21,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=1.5"
     subtitles_filter = f"subtitles='sub.srt':force_style='{force_style}'"
 
-    log("HARDSUB", f"Burning Arabic subtitles into frames (NVENC): output_subbed.mp4 in {staging_dir}...")
+    # 4. Probe source video properties and calculate dynamic visually-lossless bitrate
+    source_bitrate, duration = probe_video_properties(video_abs_path)
+
+    # Target bitrate matches source with 10% headroom for subtitle rendering complexity
+    target_bitrate = int(source_bitrate * 1.10)
+    max_rate = int(target_bitrate * 1.35)
+
+    # Absolute Size Ceiling (DoodStream 5GB Protection: guarantee <= 4200 MB)
+    if duration > 0:
+        max_allowable_bitrate = int((4200 * 1024 * 1024 * 8) / duration)
+        target_bitrate = min(target_bitrate, max_allowable_bitrate)
+        max_rate = min(max_rate, int(max_allowable_bitrate * 1.2))
+
+    buf_size = max_rate * 2
+    log("HARDSUB", f"Dynamic Bitrate Profile: duration={duration:.0f}s, source={source_bitrate/1000:.0f} kbps -> target={target_bitrate/1000:.0f} kbps, maxrate={max_rate/1000:.0f} kbps, bufsize={buf_size/1000:.0f} kbps")
+
+    log("HARDSUB", f"Burning Arabic subtitles into frames (NVENC p6/cq20): output_subbed.mp4 in {staging_dir}...")
     cmd = [
         "ffmpeg", "-y",
-        "-hwaccel", "cuda",
         "-i", ffmpeg_input,
         "-vf", subtitles_filter,
         "-c:v", "h264_nvenc",
-        "-preset", "p4",
-        "-cq", "23",
-        "-c:a", "aac",
-        "-b:a", "192k",
-        "-filter:a", "volume=1.4",
+        "-preset", "p6",
+        "-tune", "hq",
+        "-rc", "vbr",
+        "-cq", "20",
+        "-b:v", str(target_bitrate),
+        "-maxrate", str(max_rate),
+        "-bufsize", str(buf_size),
+        "-c:a", "copy",
         "output_subbed.mp4"
     ]
 
     proc = subprocess.run(cmd, cwd=staging_dir, capture_output=True, text=True)
     if proc.returncode != 0:
         err_snippet = proc.stderr[-300:] if proc.stderr else ""
-        log("HARDSUB", f"NVENC hardsubbing error ({proc.returncode}): {err_snippet}. Attempting CPU fallback (libx264 ultrafast)...")
+        log("HARDSUB", f"NVENC hardsubbing error ({proc.returncode}): {err_snippet}. Attempting CPU fallback (libx264 faster / crf 20)...")
         cmd_cpu = [
             "ffmpeg", "-y",
             "-i", ffmpeg_input,
             "-vf", subtitles_filter,
             "-c:v", "libx264",
-            "-preset", "ultrafast",
-            "-crf", "22",
-            "-c:a", "aac",
-            "-b:a", "192k",
-            "-filter:a", "volume=1.4",
+            "-preset", "faster",
+            "-crf", "20",
+            "-b:v", str(target_bitrate),
+            "-maxrate", str(max_rate),
+            "-bufsize", str(buf_size),
+            "-c:a", "copy",
             "output_subbed.mp4"
         ]
         proc_cpu = subprocess.run(cmd_cpu, cwd=staging_dir, capture_output=True, text=True)
