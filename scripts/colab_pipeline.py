@@ -611,27 +611,29 @@ def probe_video_properties(video_path: str) -> tuple[int, float]:
                 except (ValueError, TypeError):
                     pass
 
-            # Extract bitrate: stream first, then format
+            # Extract bitrate in kbps: stream first, then format
             if streams and streams[0].get("bit_rate") not in (None, "N/A"):
                 try:
-                    source_bitrate = int(float(streams[0]["bit_rate"]))
+                    raw_br = float(streams[0]["bit_rate"])
+                    source_bitrate = int(raw_br / 1000) if raw_br > 50000 else int(raw_br)
                 except (ValueError, TypeError):
                     pass
             if source_bitrate <= 0 and fmt.get("bit_rate") not in (None, "N/A"):
                 try:
-                    source_bitrate = int(float(fmt["bit_rate"]))
+                    raw_br = float(fmt["bit_rate"])
+                    source_bitrate = int(raw_br / 1000) if raw_br > 50000 else int(raw_br)
                 except (ValueError, TypeError):
                     pass
     except Exception as e:
         log("HARDSUB", f"ffprobe notice: {e}")
 
-    # Fallback: calculate bitrate from file size and duration
+    # Fallback: calculate bitrate from file size and duration (in kbps)
     if source_bitrate <= 0 and duration > 0 and file_size_bytes > 0:
-        source_bitrate = int((file_size_bytes * 8) / duration)
+        source_bitrate = int((file_size_bytes * 8) / (duration * 1000))
 
-    # Safe defaults if probe could not determine properties
+    # Safe defaults if probe could not determine properties (in kbps)
     if source_bitrate <= 0:
-        source_bitrate = 2_500_000  # Default ~2.5 Mbps
+        source_bitrate = 2500  # Default ~2500 kbps (2.5 Mbps)
     if duration <= 0:
         duration = 7200.0  # Default ~2 hours
 
@@ -642,7 +644,7 @@ def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
     Burn Arabic subtitles directly into video frames (hardsubbing) using FFmpeg.
     Enforces clean UTF-8 encoding (prioritizing windows-1256/cp1256 conversion before latin1),
     sanitizes paths, executes FFmpeg from a flat staging directory, and dynamically controls
-    bitrate with NVENC p6/cq20 to prevent file bloat while maintaining visually lossless quality.
+    bitrate with NVENC p6/cq20-22 to strictly cap output under 4200 MB for all movie lengths.
     """
     if not video_path or not os.path.exists(video_path):
         log("HARDSUB", "Video path is invalid or missing.")
@@ -712,25 +714,30 @@ def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
 
     # 3. Robust subtitle filter configuration (executed with cwd=staging_dir)
     force_style = "Fontname=Noto Sans Arabic,Alignment=2,MarginV=25,FontSize=24,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=0,Shadow=0"
-    subtitles_filter = f"subtitles='sub.srt':force_style='{force_style}'"
+    subtitles_filter = f"scale=trunc(iw/2)*2:trunc(ih/2)*2,subtitles='sub.srt':force_style='{force_style}'"
 
-    # 4. Probe source video properties and calculate dynamic visually-lossless bitrate
+    # 4. Strict Bitrate & Audio Budgeting (guarantee final container strictly under 4200 MB)
     source_bitrate, duration = probe_video_properties(video_abs_path)
+    if source_bitrate > 50000:
+        source_bitrate = int(source_bitrate / 1000)
 
-    # Target bitrate matches source with 10% headroom for subtitle rendering complexity
-    target_bitrate = int(source_bitrate * 1.10)
-    max_rate = int(target_bitrate * 1.35)
-
-    # Absolute Size Ceiling (DoodStream 5GB Protection: guarantee <= 4200 MB)
+    MAX_CONTAINER_MB = 4200
     if duration > 0:
-        max_allowable_bitrate = int((4200 * 1024 * 1024 * 8) / duration)
-        target_bitrate = min(target_bitrate, max_allowable_bitrate)
-        max_rate = min(max_rate, int(max_allowable_bitrate * 1.2))
+        total_max_kbps = int((MAX_CONTAINER_MB * 8192) / duration)
+        ceiling_video_kbps = max(1200, total_max_kbps - 400)
+        target_bitrate = min(int(source_bitrate * 1.05), ceiling_video_kbps)
+        max_rate = min(int(target_bitrate * 1.25), ceiling_video_kbps)
+    else:
+        ceiling_video_kbps = 2500
+        target_bitrate = min(int(source_bitrate * 1.05), ceiling_video_kbps)
+        max_rate = min(int(target_bitrate * 1.25), ceiling_video_kbps)
 
-    buf_size = max_rate * 2
-    log("HARDSUB", f"Dynamic Bitrate Profile: duration={duration:.0f}s, source={source_bitrate/1000:.0f} kbps -> target={target_bitrate/1000:.0f} kbps, maxrate={max_rate/1000:.0f} kbps, bufsize={buf_size/1000:.0f} kbps")
+    bufsize = max_rate * 2
+    cq_val = 22 if duration > 9000 else 20
 
-    log("HARDSUB", f"Burning Arabic subtitles into frames (NVENC p6/cq20): output_subbed.mp4 in {staging_dir}...")
+    log("HARDSUB", f"Dynamic Bitrate Profile: duration={duration:.0f}s, cq={cq_val}, source={source_bitrate} kbps -> target={target_bitrate}k, maxrate={max_rate}k (ceiling={ceiling_video_kbps}k, bufsize={bufsize}k, max 4200MB)")
+
+    log("HARDSUB", f"Burning Arabic subtitles into frames (NVENC p6/cq{cq_val}): output_subbed.mp4 in {staging_dir}...")
     cmd = [
         "ffmpeg", "-y",
         "-i", ffmpeg_input,
@@ -739,10 +746,11 @@ def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
         "-preset", "p6",
         "-tune", "hq",
         "-rc", "vbr",
-        "-cq", "20",
-        "-b:v", str(target_bitrate),
-        "-maxrate", str(max_rate),
-        "-bufsize", str(buf_size),
+        "-cq", str(cq_val),
+        "-b:v", f"{target_bitrate}k",
+        "-maxrate", f"{max_rate}k",
+        "-bufsize", f"{bufsize}k",
+        "-pix_fmt", "yuv420p",
         "-c:a", "copy",
         "output_subbed.mp4"
     ]
@@ -750,17 +758,18 @@ def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
     proc = subprocess.run(cmd, cwd=staging_dir, capture_output=True, text=True)
     if proc.returncode != 0:
         err_snippet = proc.stderr[-300:] if proc.stderr else ""
-        log("HARDSUB", f"NVENC hardsubbing error ({proc.returncode}): {err_snippet}. Attempting CPU fallback (libx264 faster / crf 20)...")
+        log("HARDSUB", f"NVENC hardsubbing error ({proc.returncode}): {err_snippet}. Attempting CPU fallback (libx264 faster / crf {cq_val})...")
         cmd_cpu = [
             "ffmpeg", "-y",
             "-i", ffmpeg_input,
             "-vf", subtitles_filter,
             "-c:v", "libx264",
             "-preset", "faster",
-            "-crf", "20",
-            "-b:v", str(target_bitrate),
-            "-maxrate", str(max_rate),
-            "-bufsize", str(buf_size),
+            "-crf", str(cq_val),
+            "-b:v", f"{target_bitrate}k",
+            "-maxrate", f"{max_rate}k",
+            "-bufsize", f"{bufsize}k",
+            "-pix_fmt", "yuv420p",
             "-c:a", "copy",
             "output_subbed.mp4"
         ]
