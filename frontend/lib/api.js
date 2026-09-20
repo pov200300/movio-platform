@@ -158,8 +158,11 @@ export function parseMovieData(post) {
   }
   if (!quality) quality = '1080p Full HD';
 
-  // 4. Embed URL
+  // 4. Embed & Download URLs
   const embedUrl = getMovieEmbedUrl(post);
+  const downloadUrl = post.meta?.download_url || 
+                      post.meta?.downloadUrl || 
+                      (embedUrl && typeof embedUrl === 'string' && embedUrl.includes('/e/') ? embedUrl.replace('/e/', '/d/') : null);
 
   // 5. Poster Image
   const posterUrl = getFeaturedImage(post);
@@ -181,12 +184,17 @@ export function parseMovieData(post) {
     rating,
     quality,
     embedUrl,
+    embed_url: embedUrl,
+    downloadUrl,
+    download_url: downloadUrl,
     directStreamUrl: post.meta?.direct_stream_url ||
                      post.meta?.stream_url ||
                      post.meta?.direct_video_url ||
                      post.meta?.video_url ||
                      post.meta?.mp4_url ||
                      null,
+    stream_url: post.meta?.stream_url || post.meta?.direct_stream_url || null,
+    dood_url: post.meta?.dood_url || post.meta?.dood_embed || embedUrl || null,
     posterUrl,
     synopsis,
     categories: post.categories || [],

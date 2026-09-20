@@ -20,6 +20,30 @@ export async function generateMetadata({ params }) {
   };
 }
 
+// Helper to derive high-speed direct download link from DoodStream or direct sources
+const getDownloadUrl = (movie) => {
+  if (!movie) return null;
+  if (movie.download_url) {
+    return movie.download_url.includes('/e/') ? movie.download_url.replace('/e/', '/d/') : movie.download_url;
+  }
+  if (movie.downloadUrl) {
+    return movie.downloadUrl.includes('/e/') ? movie.downloadUrl.replace('/e/', '/d/') : movie.downloadUrl;
+  }
+  if (movie.embed_url && typeof movie.embed_url === 'string' && movie.embed_url.includes('/e/')) {
+    return movie.embed_url.replace('/e/', '/d/');
+  }
+  if (movie.embedUrl && typeof movie.embedUrl === 'string' && movie.embedUrl.includes('/e/')) {
+    return movie.embedUrl.replace('/e/', '/d/');
+  }
+  if (movie.dood_url && typeof movie.dood_url === 'string' && movie.dood_url.includes('/e/')) {
+    return movie.dood_url.replace('/e/', '/d/');
+  }
+  if (movie.doodUrl && typeof movie.doodUrl === 'string' && movie.doodUrl.includes('/e/')) {
+    return movie.doodUrl.replace('/e/', '/d/');
+  }
+  return movie.stream_url || movie.directStreamUrl || movie.embed_url || movie.embedUrl || null;
+};
+
 export default async function MoviePage({ params }) {
   const post = await getMovieBySlug(params.slug);
   
@@ -31,6 +55,9 @@ export default async function MoviePage({ params }) {
   if (!movie) {
     notFound();
   }
+
+  // Derive direct download URL
+  const downloadUrl = getDownloadUrl(movie);
 
   // Fetch related movies for bottom recommendations
   const allMovies = await getLatestMovies(10);
@@ -94,14 +121,21 @@ export default async function MoviePage({ params }) {
               <a href="#player" className={styles.actionBtnPlay}>
                 ▶ تشغيل الفيلم
               </a>
-              {movie.embedUrl && (
+              {downloadUrl ? (
                 <a 
-                  href={movie.embedUrl} 
+                  href={downloadUrl} 
                   target="_blank" 
                   rel="noopener noreferrer" 
                   className={styles.actionBtnDownload}
                 >
                   ⬇ سيرفر التحميل
+                </a>
+              ) : (
+                <a 
+                  className={`${styles.actionBtnDownload} ${styles.actionBtnDownloadDisabled}`}
+                  aria-disabled="true"
+                >
+                  التحميل غير متوفر حالياً
                 </a>
               )}
             </div>
