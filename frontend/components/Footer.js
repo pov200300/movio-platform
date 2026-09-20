@@ -9,9 +9,21 @@ export default function Footer() {
         <div className={styles.footerGrid}>
           {/* Brand & Slogan */}
           <div className={styles.brandCol}>
-            <Link href="/" className={styles.logo}>
-              <span className={styles.logoRed}>EGY</span>
-              <span className={styles.logoWhite}>MAX</span>
+            <Link href="/" className={styles.logo} aria-label="EGYMAX الرئيسية">
+              <span className={styles.logoIconWrapper}>
+                <svg viewBox="0 0 64 64" width="28" height="28" aria-hidden="true">
+                  <rect width="64" height="64" rx="16" fill="#050608" />
+                  <rect width="61" height="61" x="1.5" y="1.5" rx="14.5" fill="none" stroke="#ffffff" strokeWidth="1.8" />
+                  <circle cx="51" cy="14" r="2.5" fill="#ff1723" />
+                  <path d="M14 16 H31 L28 23 H21 V28 H28 L25 35 H21 V41 H30 L27 48 H14 Z" fill="#e50914" />
+                  <path d="M33 16 H40 L50 32 L40 48 H33 L43 32 Z" fill="#ffffff" />
+                  <path d="M49 16 H43 L33 32 L43 48 H49 L39 32 Z" fill="#ff1723" />
+                </svg>
+              </span>
+              <span className={styles.logoText}>
+                <span className={styles.logoRed}>EGY</span>
+                <span className={styles.logoWhite}>MAX</span>
+              </span>
             </Link>
             <p className={styles.brandDescription}>
               منصة EGYMAX هي بوابتك الرقمية الأولى لمشاهدة وتحميل أحدث الأفلام والمسلسلات العربية والأجنبية بجودة فائقة وبشكل مجاني وسلس على مدار الساعة.

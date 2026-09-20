@@ -31,17 +31,29 @@
 }
 
 .logo {
-  font-size: 1.75rem;
-  font-weight: 900;
-  letter-spacing: 1.5px;
   text-decoration: none;
   display: inline-flex;
   align-items: center;
+  gap: 0.6rem;
   direction: ltr;
   unicode-bidi: isolate;
   border: none;
   outline: none;
-  gap: 0;
+}
+
+.logoIconWrapper {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.logoText {
+  display: inline-flex;
+  align-items: center;
+  font-size: 1.75rem;
+  font-weight: 900;
+  letter-spacing: 1.5px;
 }
 
 .logoRed {

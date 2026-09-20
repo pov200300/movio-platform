@@ -49,12 +49,10 @@
 }
 
 .logo {
-  font-size: 1.75rem;
-  font-weight: 900;
-  letter-spacing: 1.5px;
   text-decoration: none;
   display: inline-flex;
   align-items: center;
+  gap: 0.65rem;
   direction: ltr;
   unicode-bidi: isolate;
   border: none;
@@ -64,6 +62,32 @@
 
 .logo:hover {
   transform: scale(1.03);
+}
+
+.logoIconWrapper {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: filter 0.2s ease;
+}
+
+.logo:hover .logoIconWrapper {
+  filter: drop-shadow(0 0 10px rgba(229, 9, 20, 0.7));
+}
+
+.logoIconSvg {
+  width: 32px;
+  height: 32px;
+  display: block;
+}
+
+.logoText {
+  display: inline-flex;
+  align-items: center;
+  font-size: 1.75rem;
+  font-weight: 900;
+  letter-spacing: 1.5px;
 }
 
 .logoRed {
@@ -173,6 +197,15 @@
   .mobileActive {
     background: rgba(229, 9, 20, 0.15);
     color: var(--accent-red) !important;
+  }
+
+  .logoIconSvg {
+    width: 28px;
+    height: 28px;
+  }
+
+  .logoText {
+    font-size: 1.5rem;
   }
 }
 
