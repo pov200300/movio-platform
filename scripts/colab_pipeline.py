@@ -75,10 +75,34 @@ def log(tag: str, msg: str):
 # =============================================================================
 # 1. METADATA & POSTER RESOLUTION (TMDB API)
 # =============================================================================
-def fetch_tmdb_metadata(movie_title: str, release_year: str = None, imdb_id: str = None, api_key: str = TMDB_API_KEY) -> dict:
+def translate_to_arabic(text: str) -> str:
     """
-    Fetch verified metadata, original high-resolution poster, backdrop,
-    genres, and rating from official TMDB API.
+    Translate English synopsis to clean Arabic using deep-translator (GoogleTranslator with MyMemory fallback).
+    """
+    if not text or not text.strip():
+        return ""
+    try:
+        from deep_translator import GoogleTranslator
+        res = GoogleTranslator(source='en', target='ar').translate(text)
+        if res and res.strip():
+            return res.strip()
+    except Exception:
+        pass
+
+    try:
+        from deep_translator import MyMemoryTranslator
+        res = MyMemoryTranslator(source='en-US', target='ar-SA').translate(text)
+        if res and res.strip():
+            return res.strip()
+    except Exception:
+        pass
+
+    return text
+
+def get_movie_metadata(movie_title: str, release_year: str = None, imdb_id: str = None, api_key: str = TMDB_API_KEY) -> dict:
+    """
+    Fetch verified metadata, Arabic title, Arabic overview (with deep-translator fallback),
+    cast (top 5), poster, backdrop, genres, and rating from official TMDB API.
     """
     log("TMDB", f"Querying TMDB for '{movie_title}' (Year: {release_year or 'Any'}, IMDb: {imdb_id or 'None'})...")
     
@@ -110,10 +134,14 @@ def fetch_tmdb_metadata(movie_title: str, release_year: str = None, imdb_id: str
         except Exception as e:
             log("TMDB", f"Search error: {e}")
 
-    # Fetch extended details for genres & runtime if movie was found
+    # Initial defaults
     genres = "Action, Drama"
     tmdb_rating = "7.5"
-    overview = "No synopsis available."
+    overview_en = "No synopsis available."
+    overview_ar = ""
+    title_ar = movie_title
+    original_title = movie_title
+    cast_list = []
     poster_url = None
     backdrop_url = None
     final_title = movie_title
@@ -122,8 +150,10 @@ def fetch_tmdb_metadata(movie_title: str, release_year: str = None, imdb_id: str
 
     if movie_item:
         final_title = movie_item.get("title") or movie_title
+        original_title = movie_item.get("original_title") or final_title
+        title_ar = final_title
         final_year = (movie_item.get("release_date") or "")[:4] or final_year
-        overview = movie_item.get("overview") or overview
+        overview_en = movie_item.get("overview") or overview_en
         tmdb_rating = str(round(movie_item.get("vote_average", 7.5), 1))
         
         poster_path = movie_item.get("poster_path")
@@ -137,13 +167,59 @@ def fetch_tmdb_metadata(movie_title: str, release_year: str = None, imdb_id: str
         tmdb_id = movie_item.get("id")
         if tmdb_id and api_key:
             try:
-                detail_url = f"https://api.themoviedb.org/3/movie/{tmdb_id}?api_key={api_key}"
-                d_res = requests.get(detail_url, headers=HEADERS, timeout=15).json()
-                if "genres" in d_res:
-                    genres = ", ".join([g["name"] for g in d_res["genres"]])
-                extracted_imdb_id = d_res.get("imdb_id") or extracted_imdb_id
+                # Query TMDB with language=ar-SA and append_to_response=credits
+                detail_ar_url = f"https://api.themoviedb.org/3/movie/{tmdb_id}?api_key={api_key}&language=ar-SA&append_to_response=credits"
+                d_ar = requests.get(detail_ar_url, headers=HEADERS, timeout=15).json()
+
+                if d_ar.get("title"):
+                    title_ar = d_ar.get("title")
+                if d_ar.get("original_title"):
+                    original_title = d_ar.get("original_title")
+                if d_ar.get("overview"):
+                    overview_ar = d_ar.get("overview").strip()
+
+                # Extract top 4-5 leading actors
+                credits_cast = d_ar.get("credits", {}).get("cast", [])
+                if not credits_cast:
+                    # Fallback to English credits if credits missing in Arabic endpoint
+                    try:
+                        c_res = requests.get(f"https://api.themoviedb.org/3/movie/{tmdb_id}/credits?api_key={api_key}", headers=HEADERS, timeout=10).json()
+                        credits_cast = c_res.get("cast", [])
+                    except Exception:
+                        pass
+
+                cast_list = [c.get("name") for c in credits_cast[:5] if c.get("name")]
+
+                # Genres
+                if "genres" in d_ar and d_ar["genres"]:
+                    genres = ", ".join([g["name"] for g in d_ar["genres"]])
+
+                extracted_imdb_id = d_ar.get("imdb_id") or extracted_imdb_id
             except Exception as e:
-                log("TMDB", f"Details lookup error: {e}")
+                log("TMDB", f"Arabic details lookup notice: {e}")
+
+    # If overview_ar is empty, fallback to English overview translated to Arabic via deep-translator
+    if not overview_ar:
+        if overview_en and overview_en != "No synopsis available.":
+            log("TMDB", "Arabic synopsis empty on TMDB. Translating English overview to Arabic via deep-translator...")
+            overview_ar = translate_to_arabic(overview_en)
+        if not overview_ar:
+            overview_ar = "تدور أحداث الفيلم في إطار مشوق ومثير مليء بالأحداث غير المتوقعة والمغامرات الشيقة."
+
+    # Top cast string
+    cast_names = "، ".join(cast_list) if cast_list else ""
+
+    # Generate Professional Arabic SEO Description matching modern Arabic cinema platforms
+    if cast_names:
+        if original_title and original_title.lower() != title_ar.lower():
+            seo_intro = f"مشاهدة وتحميل فيلم {title_ar} ({original_title}) {final_year} مترجم كامل بجودة 1080p BluRay عالية أون لاين، بطولة {cast_names}."
+        else:
+            seo_intro = f"مشاهدة وتحميل فيلم {title_ar} {final_year} مترجم كامل بجودة 1080p BluRay عالية أون لاين، بطولة {cast_names}."
+    else:
+        if original_title and original_title.lower() != title_ar.lower():
+            seo_intro = f"مشاهدة وتحميل فيلم {title_ar} ({original_title}) {final_year} مترجم كامل بجودة 1080p BluRay عالية أون لاين."
+        else:
+            seo_intro = f"مشاهدة وتحميل فيلم {title_ar} {final_year} مترجم كامل بجودة 1080p BluRay عالية أون لاين."
 
     # Fallback to high quality placeholder if no poster found
     if not poster_url:
@@ -151,16 +227,24 @@ def fetch_tmdb_metadata(movie_title: str, release_year: str = None, imdb_id: str
 
     meta = {
         "title": final_title,
+        "title_ar": title_ar,
+        "original_title": original_title,
         "year": final_year,
-        "overview": overview,
+        "overview": overview_en,
+        "overview_ar": overview_ar,
+        "cast": cast_list,
+        "cast_names": cast_names,
+        "seo_description": seo_intro,
         "rating": tmdb_rating,
         "genres": genres,
         "poster_url": poster_url,
         "backdrop_url": backdrop_url,
         "imdb_id": extracted_imdb_id,
     }
-    log("TMDB", f"Metadata ready: '{meta['title']}' ({meta['year']}) | ★ {meta['rating']} | {meta['genres']}")
+    log("TMDB", f"Metadata ready: '{meta['title']}' ({meta['year']}) | Title AR: '{meta['title_ar']}' | ★ {meta['rating']} | Cast: {cast_names or 'N/A'}")
     return meta
+
+fetch_tmdb_metadata = get_movie_metadata
 
 # =============================================================================
 # 2. TORRENT ACQUISITION (YTS API)
@@ -812,19 +896,21 @@ def publish_movie_to_pantheon(meta: dict, embed_url: str, quality: str = "1080p"
     title = f"{meta['title']} ({meta['year']})"
     log("WP", f"Publishing post to Pantheon: '{title}'...")
 
-    # Structured 16:9 Responsive Embed HTML (STRICT double quotes for Next.js regex parser)
+    # Structured 16:9 Responsive Embed HTML & Clean SEO/Story Sections
+    seo_intro_paragraph = meta.get("seo_description") or f"مشاهدة وتحميل فيلم {meta.get('title_ar', meta['title'])} ({meta['year']}) مترجم كامل بجودة 1080p BluRay عالية أون لاين."
+    story_paragraph = meta.get("overview_ar") or meta.get("overview") or "تدور أحداث الفيلم في إطار مشوق ومثير مليء بالأحداث غير المتوقعة والمغامرات الشيقة."
+
     content = f"""
 <div class="video-container" style="position: relative; padding-bottom: 56.25%; height: 0; overflow: hidden; max-width: 100%; border-radius: 12px; margin-bottom: 1.5rem;">
     <iframe src="{embed_url}" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: 0;" allowfullscreen="true" scrolling="no" frameborder="0"></iframe>
 </div>
 
-<div class="movie-meta-summary">
-    <p><strong>Rating:</strong> {meta.get('rating', '8.0')} / 10</p>
-    <p><strong>Release Year:</strong> {meta.get('year', '2026')}</p>
-    <p><strong>Genres:</strong> {meta.get('genres', 'Movies')}</p>
-    <p><strong>Quality:</strong> {quality} Full HD</p>
-    <hr>
-    <p>{meta.get('overview', '')}</p>
+<div class="movie-seo-intro">
+  <p>{seo_intro_paragraph}</p>
+</div>
+<div class="movie-story-section">
+  <h3 class="story-title">القصة</h3>
+  <p class="story-text">{story_paragraph}</p>
 </div>
 """
 
@@ -846,7 +932,11 @@ def publish_movie_to_pantheon(meta: dict, embed_url: str, quality: str = "1080p"
             "imdb_rating": str(meta.get("rating", "8.0")),
             "quality": quality,
             "backdrop_url": meta.get("backdrop_url") or "",
-            "genres": meta.get("genres", "")
+            "genres": meta.get("genres", ""),
+            "overview_ar": meta.get("overview_ar", ""),
+            "cast": ", ".join(meta.get("cast", [])) if isinstance(meta.get("cast"), list) else str(meta.get("cast", "")),
+            "title_ar": meta.get("title_ar", ""),
+            "seo_description": seo_intro_paragraph
         }
     }
     if category_ids:

@@ -14,9 +14,12 @@ export async function generateMetadata({ params }) {
   if (!post) return { title: 'الفيلم غير موجود | EGYMAX' };
   
   const movie = parseMovieData(post);
+  const description = movie.seoDescription || 
+    `مشاهدة وتحميل فيلم ${movie.displayTitle} (${movie.year}) مترجم بجودة فائقة ${movie.quality} بدقة 1080p مجاناً على سيرفرات سريعة حصرياً على EGYMAX.`;
+
   return {
     title: `مشاهدة فيلم ${movie.displayTitle} (${movie.year}) مترجم | EGYMAX`,
-    description: `مشاهدة وتحميل فيلم ${movie.displayTitle} (${movie.year}) مترجم بجودة فائقة ${movie.quality} بدقة 1080p مجاناً على سيرفرات سريعة حصرياً على EGYMAX.`,
+    description,
   };
 }
 
@@ -65,9 +68,12 @@ export default async function MoviePage({ params }) {
     .filter(m => m.id !== post.id)
     .slice(0, 6);
 
-  // Extract clean synopsis
-  let cleanSynopsis = movie.synopsis || '';
-  cleanSynopsis = cleanSynopsis.replace(/<[^>]+>/g, '').trim();
+  // Extract clean synopsis (stripping residual technical headers if from legacy posts)
+  let cleanSynopsis = (movie.synopsis || '')
+    .replace(/<[^>]+>/g, '')
+    .replace(/(Rating|Release Year|Genres|Quality):.*?(?=(Rating|Release Year|Genres|Quality|$))/gi, '')
+    .replace(/★\s*[0-9.]+/g, '')
+    .trim();
 
   return (
     <div className="container">
@@ -146,6 +152,12 @@ export default async function MoviePage({ params }) {
                   </div>
                 </div>
               )}
+              {movie.cast && movie.cast.length > 0 && (
+                <div className={styles.metaItem}>
+                  <span className={styles.metaLabel}>طاقم العمل:</span>
+                  <span className={styles.metaValue}>{movie.cast.join('، ')}</span>
+                </div>
+              )}
               <div className={styles.metaItem}>
                 <span className={styles.metaLabel}>الجودة:</span>
                 <span className={styles.tagQuality}>{movie.quality}</span>
@@ -156,8 +168,15 @@ export default async function MoviePage({ params }) {
               </div>
             </div>
 
+            {/* Professional Arabic SEO Description */}
+            {movie.seoDescription && (
+              <div className={styles.seoIntroBox}>
+                <p className={styles.seoIntroText}>{movie.seoDescription}</p>
+              </div>
+            )}
+
             <div className={styles.synopsisBox}>
-              <h3 className={styles.synopsisHeading}>📖 قصة العرض</h3>
+              <h3 className={styles.synopsisHeading}>📖 قصة الفيلم</h3>
               <p className={styles.synopsisText}>
                 {cleanSynopsis || 'تدور أحداث الفيلم في إطار مشوق ومثير مليء بالأحداث غير المتوقعة والمغامرات الشيقة.'}
               </p>

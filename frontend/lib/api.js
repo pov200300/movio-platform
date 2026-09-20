@@ -139,6 +139,27 @@ export const GENRE_MAP_AR = {
   Western: 'غرب أمريكي',
 };
 
+// Decode common HTML entities cleanly
+export function decodeHtmlEntities(str) {
+  if (!str || typeof str !== 'string') return '';
+  return str
+    .replace(/&#8220;/g, '“')
+    .replace(/&#8221;/g, '”')
+    .replace(/&#8216;/g, '‘')
+    .replace(/&#8217;/g, '’')
+    .replace(/&#8211;/g, '–')
+    .replace(/&#8212;/g, '—')
+    .replace(/&#8230;/g, '…')
+    .replace(/&quot;/g, '"')
+    .replace(/&#039;/g, "'")
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&#(\d+);/g, (_, dec) => String.fromCharCode(dec));
+}
+
 /**
  * Parse all movie attributes with deep fallbacks across meta, title, and HTML content
  */
@@ -190,14 +211,58 @@ export function parseMovieData(post) {
   // 5. Poster Image
   const posterUrl = getFeaturedImage(post);
 
-  // 6. Synopsis
-  let synopsis = post.excerpt?.rendered || content;
-  synopsis = synopsis
-    .replace(/<div class="video-container".*?<\/div>/gis, '')
-    .replace(/<iframe.*?<\/iframe>/gis, '')
-    .trim();
+  // 6. Professional SEO Description
+  let seoDescription = post.meta?.seo_description || '';
+  if (!seoDescription) {
+    const seoMatch = content.match(/<div class=["']movie-seo-intro["']>\s*<p>(.*?)<\/p>/is);
+    if (seoMatch) {
+      seoDescription = seoMatch[1].replace(/<[^>]+>/g, '').trim();
+    }
+  }
+  seoDescription = decodeHtmlEntities(seoDescription);
 
-  // 7. Extract Genres from embedded WordPress taxonomy, meta, or content
+  // 7. Clean Arabic Synopsis / Story
+  let synopsis = post.meta?.overview_ar || '';
+  if (!synopsis) {
+    const storyMatch = content.match(/<p class=["']story-text["']>(.*?)<\/p>/is);
+    if (storyMatch) {
+      synopsis = storyMatch[1];
+    }
+  }
+  if (!synopsis) {
+    const sectionMatch = content.match(/<div class=["']movie-story-section["']>.*?<p.*?>(.*?)<\/p>/is);
+    if (sectionMatch) {
+      synopsis = sectionMatch[1];
+    }
+  }
+  if (!synopsis) {
+    // Legacy fallback: strip technical tags and raw meta dumps
+    synopsis = post.excerpt?.rendered || content;
+    synopsis = synopsis
+      .replace(/<div class="video-container".*?<\/div>/gis, '')
+      .replace(/<iframe.*?<\/iframe>/gis, '')
+      .replace(/<div class="movie-meta-summary".*?<\/div>/gis, '')
+      .replace(/<div class="movie-seo-intro".*?<\/div>/gis, '')
+      .replace(/<p><strong>(Rating|Release Year|Genres|Quality):<\/strong>.*?<\/p>/gis, '')
+      .replace(/<strong>(Rating|Release Year|Genres|Quality):<\/strong>[^<\n]+/gis, '')
+      .replace(/<hr\s*\/?>/gis, '')
+      .trim();
+  }
+  synopsis = decodeHtmlEntities(synopsis.replace(/<[^>]+>/g, '').trim());
+
+  // 8. Cast
+  let cast = [];
+  if (post.meta?.cast) {
+    const rawCast = Array.isArray(post.meta.cast)
+      ? post.meta.cast
+      : String(post.meta.cast).split(/[,،]/);
+    cast = rawCast.map(c => c.trim()).filter(Boolean);
+  }
+
+  // 9. Arabic Title
+  const titleAr = post.meta?.title_ar || '';
+
+  // 10. Extract Genres from embedded WordPress taxonomy, meta, or content
   let genres = [];
   if (post._embedded && post._embedded['wp:term'] && Array.isArray(post._embedded['wp:term'][0])) {
     genres = post._embedded['wp:term'][0]
@@ -235,10 +300,13 @@ export function parseMovieData(post) {
     rawTitle,
     cleanTitle,
     displayTitle: cleanTitle || rawTitle,
+    titleAr,
     year,
     rating,
     quality,
     genres,
+    cast,
+    seoDescription,
     embedUrl,
     embed_url: embedUrl,
     downloadUrl,
