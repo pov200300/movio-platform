@@ -457,40 +457,81 @@ def download_subtitles_for_imdb(imdb_id: str, output_dir: str = DOWNLOAD_DIR) ->
 def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
     """
     Burn Arabic subtitles directly into video frames (hardsubbing) using FFmpeg.
-    Uses sleek Netflix-style font and outline (Arial, FontSize=16, Outline=1, Shadow=0, MarginV=25).
-    Audio stream is copied directly without re-encoding (-c:a copy).
+    Enforces clean UTF-8 encoding (windows-1256/iso-8859-6 conversion), sanitizes paths,
+    and runs FFmpeg from the subtitle directory to avoid filtergraph path escaping failures.
     """
+    if not video_path or not os.path.exists(video_path):
+        log("HARDSUB", "Video path is invalid or missing.")
+        return video_path
+
     if not srt_path or not os.path.exists(srt_path):
         log("HARDSUB", "No Arabic subtitle provided or file missing; using original video as fallback.")
         return video_path
-
-    # Additional sanity check on subtitle content
-    try:
-        with open(srt_path, 'r', encoding='utf-8', errors='ignore') as f:
-            sample_text = f.read(50000)
-        if not re.search(r'[\u0600-\u06FF]', sample_text):
-            log("HARDSUB", f"⚠️ Subtitle '{srt_path}' contains no Arabic Unicode characters; using original video.")
-            return video_path
-    except Exception as e:
-        log("HARDSUB", f"⚠️ Error checking subtitle content: {e}")
 
     ffmpeg_bin = shutil.which("ffmpeg")
     if not ffmpeg_bin:
         log("HARDSUB", "ffmpeg not found in PATH; skipping hardsubbing and using raw video.")
         return video_path
 
-    base_name, _ = os.path.splitext(video_path)
-    output_path = f"{base_name}_subbed.mp4"
+    # 1. Force UTF-8 conversion (detecting windows-1256, iso-8859-6, cp1256, latin1, UTF-8 BOM)
+    clean_sub_text = None
+    encodings_to_try = ['utf-8-sig', 'utf-8', 'cp1256', 'windows-1256', 'iso-8859-6', 'latin1']
+    try:
+        with open(srt_path, 'rb') as sf:
+            raw_bytes = sf.read()
+
+        for enc in encodings_to_try:
+            try:
+                candidate = raw_bytes.decode(enc)
+                if '-->' in candidate:
+                    clean_sub_text = candidate
+                    break
+            except (UnicodeDecodeError, LookupError):
+                continue
+
+        if clean_sub_text is None:
+            clean_sub_text = raw_bytes.decode('utf-8', errors='ignore')
+
+        # Remove BOM if present and normalize line endings
+        clean_sub_text = clean_sub_text.lstrip('\ufeff').replace('\r\n', '\n').replace('\r', '\n')
+
+        # Verify subtitle contains actual Arabic Unicode characters (\u0600-\u06FF)
+        if not re.search(r'[\u0600-\u06FF]', clean_sub_text):
+            log("HARDSUB", f"⚠️ Subtitle '{srt_path}' contains no Arabic Unicode characters; using original video.")
+            return video_path
+    except Exception as e:
+        log("HARDSUB", f"⚠️ Error validating subtitle encoding: {e}; falling back to raw video.")
+        return video_path
+
+    # 2. Sanitize file paths & write to a clean flat subtitle path
+    video_path = os.path.abspath(video_path)
+    output_dir = os.path.dirname(video_path)
+    os.makedirs(output_dir, exist_ok=True)
+
+    # Use /content if on Colab, otherwise output directory
+    temp_dir = "/content" if (os.path.exists("/content") and os.path.isdir("/content")) else output_dir
+    temp_sub_path = os.path.join(temp_dir, "temp_sub.srt")
+
+    try:
+        with open(temp_sub_path, 'w', encoding='utf-8', newline='\n') as out_sf:
+            out_sf.write(clean_sub_text)
+        log("HARDSUB", f"Sanitized subtitle written in clean UTF-8: {temp_sub_path}")
+    except Exception as e:
+        log("HARDSUB", f"⚠️ Could not write {temp_sub_path}: {e}")
+        temp_sub_path = srt_path
+        temp_dir = os.path.dirname(os.path.abspath(srt_path))
+
+    # Sanitize output filename: strip brackets, parentheses, and quotes to avoid filtergraph syntax errors
+    base_name = os.path.splitext(os.path.basename(video_path))[0]
+    safe_base = re.sub(r'[\[\]\(\)\'\"`]', '', base_name).strip().replace(' ', '_')
+    output_path = os.path.join(output_dir, f"{safe_base}_subbed.mp4")
     if os.path.abspath(output_path) == os.path.abspath(video_path):
-        output_path = f"{base_name}_burned.mp4"
+        output_path = os.path.join(output_dir, f"{safe_base}_burned.mp4")
 
-    # Escape special characters in the subtitle file path for FFmpeg filter syntax (escape ':' and ''')
-    clean_path = os.path.abspath(srt_path).replace("\\", "/")
-    escaped_srt = clean_path.replace(":", "\\:").replace("'", "\\'")
-
-    # Sleek Netflix-style subtitle styling with Arabic Noto font support and low letterbox margin
-    force_style = "FontName=Noto Sans Arabic,FontSize=20,Bold=1,Alignment=2,MarginV=12,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=1.5,Shadow=0"
-    subtitles_filter = f"subtitles='{escaped_srt}':force_style='{force_style}'"
+    # 3. Robust subtitle filter configuration (executed with cwd=temp_dir so no path colons/slashes needed)
+    sub_filename = os.path.basename(temp_sub_path)
+    force_style = "Alignment=2,MarginV=20,FontSize=21,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=1.5"
+    subtitles_filter = f"subtitles='{sub_filename}':force_style='{force_style}'"
 
     log("HARDSUB", f"Burning Arabic subtitles into frames (NVENC): {os.path.basename(output_path)}...")
     cmd = [
@@ -507,9 +548,10 @@ def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
         output_path
     ]
 
-    proc = subprocess.run(cmd, capture_output=True, text=True)
+    proc = subprocess.run(cmd, cwd=temp_dir, capture_output=True, text=True)
     if proc.returncode != 0:
-        log("HARDSUB", f"NVENC hardsubbing error ({proc.returncode}). Attempting CPU fallback (libx264 ultrafast)...")
+        err_snippet = proc.stderr[-300:] if proc.stderr else ""
+        log("HARDSUB", f"NVENC hardsubbing error ({proc.returncode}): {err_snippet}. Attempting CPU fallback (libx264 ultrafast)...")
         cmd_cpu = [
             "ffmpeg", "-y",
             "-i", video_path,
@@ -522,11 +564,20 @@ def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
             "-filter:a", "volume=1.4",
             output_path
         ]
-        proc_cpu = subprocess.run(cmd_cpu, capture_output=True, text=True)
+        proc_cpu = subprocess.run(cmd_cpu, cwd=temp_dir, capture_output=True, text=True)
         if proc_cpu.returncode != 0:
-            log("HARDSUB", f"CPU fallback failed ({proc_cpu.returncode}): {proc_cpu.stderr[-300:]}")
+            cpu_snippet = proc_cpu.stderr[-300:] if proc_cpu.stderr else ""
+            log("HARDSUB", f"❌ CPU fallback failed ({proc_cpu.returncode}): {cpu_snippet}")
             log("HARDSUB", "Falling back to original video file.")
+            if temp_sub_path != srt_path and os.path.exists(temp_sub_path):
+                try: os.remove(temp_sub_path)
+                except Exception: pass
             return video_path
+
+    # Clean up temp subtitle file
+    if temp_sub_path != srt_path and os.path.exists(temp_sub_path):
+        try: os.remove(temp_sub_path)
+        except Exception: pass
 
     if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
         file_size_mb = os.path.getsize(output_path) / (1024 * 1024)
@@ -732,6 +783,18 @@ def run_pipeline(movie_title: str, release_year: str = None, imdb_id: str = None
     # 5. Burn Arabic Subtitles directly into video frames
     burned_video_path = burn_arabic_subtitles(raw_video_path, arabic_srt_path)
 
+    # Accurate subtitle status evaluation (prevents false positive 'Burned In' report)
+    if not arabic_srt_path:
+        arabic_sub_status = "None (No Arabic Subtitle Found)"
+    elif (burned_video_path != raw_video_path and 
+          os.path.exists(burned_video_path) and 
+          os.path.getsize(burned_video_path) > 0):
+        arabic_sub_status = "Burned In"
+    else:
+        arabic_sub_status = "Failed (Uploaded Original Unsubbed)"
+
+    log("PIPELINE", f"Subtitling status: {arabic_sub_status}")
+
     # 6. Upload burned video to DoodStream with Retry & Server Re-allocation
     embed_url = upload_to_doodstream(burned_video_path)
 
@@ -752,7 +815,7 @@ def run_pipeline(movie_title: str, release_year: str = None, imdb_id: str = None
     print("  PIPELINE COMPLETED SUCCESSFULLY!")
     print(f"  Title:      {meta['title']} ({meta['year']})")
     print(f"  Rating:     ★ {meta['rating']}")
-    print(f"  Arabic Sub: {'Burned In' if arabic_srt_path else 'None'}")
+    print(f"  Arabic Sub: {arabic_sub_status}")
     print(f"  Embed:      {embed_url}")
     print(f"  Live Post:  {post_data.get('link')}")
     print(f"  Next.js:    http://localhost:3000/movie/{post_data.get('slug')}")
