@@ -396,13 +396,53 @@ def download_with_aria2(torrent_source: str, download_dir: str = DOWNLOAD_DIR) -
     log("ARIA2", f"Download complete: {os.path.basename(target_video)} ({file_size_mb:.2f} MB)")
     return target_video
 
+def decode_arabic_subtitle(raw_bytes: bytes) -> tuple:
+    """
+    Decodes raw subtitle bytes testing encodings strictly in priority order:
+    1. utf-8-sig
+    2. utf-8
+    3. cp1256 (Windows Arabic)
+    4. windows-1256
+    5. iso-8859-6
+
+    (Does NOT test or fallback to latin1 before trying Arabic encodings).
+    Only accepts if decoded text contains Arabic Unicode characters (\\u0600-\\u06FF).
+    Returns (cleaned_text, detected_encoding) or (None, None).
+    """
+    if not raw_bytes:
+        return None, None
+
+    encodings_to_try = ['utf-8-sig', 'utf-8', 'cp1256', 'windows-1256', 'iso-8859-6']
+
+    # Pass 1: Strict check (timing marker '-->' and Arabic Unicode characters)
+    for enc in encodings_to_try:
+        try:
+            candidate = raw_bytes.decode(enc)
+            if '-->' in candidate and re.search(r'[\u0600-\u06FF]', candidate):
+                clean_text = candidate.lstrip('\ufeff').replace('\r\n', '\n').replace('\r', '\n')
+                return clean_text, enc
+        except (UnicodeDecodeError, LookupError):
+            continue
+
+    # Pass 2: Fallback check (Arabic Unicode characters present)
+    for enc in encodings_to_try:
+        try:
+            candidate = raw_bytes.decode(enc)
+            if re.search(r'[\u0600-\u06FF]', candidate):
+                clean_text = candidate.lstrip('\ufeff').replace('\r\n', '\n').replace('\r', '\n')
+                return clean_text, enc
+        except (UnicodeDecodeError, LookupError):
+            continue
+
+    return None, None
+
 # =============================================================================
 # 4. ARABIC-ONLY SUBTITLES & FFMPEG HARDSUBBING (BURN-IN)
 # =============================================================================
 def download_subtitles_for_imdb(imdb_id: str, output_dir: str = DOWNLOAD_DIR) -> str:
     """
     Search and download ONLY the highest-rated Arabic (.srt) subtitle file.
-    Validates content with Unicode regex [\u0600-\u06FF].
+    Validates content with Unicode regex [\\u0600-\\u06FF] across Arabic code pages.
     Returns the local path to the .srt file if successful, or None if not found or failed.
     """
     if not imdb_id:
@@ -472,77 +512,74 @@ def download_subtitles_for_imdb(imdb_id: str, output_dir: str = DOWNLOAD_DIR) ->
         log("SUBS", f"No Arabic subtitles found for IMDb ID {imdb_id}.")
         return None
 
-    # 3. Download .zip archive and extract Arabic .srt
-    try:
-        slug = arabic_sub_url.rstrip("/").split("/")[-1]
-        zip_url = f"https://yifysubtitles.ch/subtitle/{slug}.zip"
-        page_referer = f"https://yifysubtitles.ch/subtitles/{slug}"
+    # 3. Download .zip archive and extract Arabic .srt with anti-bot check and mirror resilience
+    slug = arabic_sub_url.rstrip("/").split("/")[-1]
+    zip_mirrors = [
+        "https://yifysubtitles.ch",
+        "https://yts-subs.com",
+        "https://yifysubtitles.org"
+    ]
+
+    for zip_base in zip_mirrors:
+        zip_url = f"{zip_base}/subtitle/{slug}.zip"
+        page_referer = f"{zip_base}/subtitles/{slug}"
         req_headers = {
             "User-Agent": headers["User-Agent"],
             "Referer": page_referer
         }
-        zr = requests.get(zip_url, headers=req_headers, timeout=15)
-        if zr.status_code == 200:
-            with zipfile.ZipFile(io.BytesIO(zr.content)) as z:
-                srt_files = [f for f in z.namelist() if f.lower().endswith(".srt") and not f.startswith("__MACOSX")]
-                if not srt_files:
-                    log("SUBS", f"No .srt files found in archive for {imdb_id}.")
-                    return None
+        try:
+            zr = requests.get(zip_url, headers=req_headers, timeout=15)
+            if zr.status_code == 200:
+                raw_data = zr.content.strip()
+                # Inspect downloaded content: check if an HTML error / anti-bot page was returned
+                if raw_data.lower().startswith(b"<!doctype html") or raw_data.lower().startswith(b"<html") or b"<body" in raw_data[:500].lower():
+                    log("SUBS", f"⚠️ Mirror {zip_base} returned HTML anti-bot/error page instead of ZIP. Trying next mirror...")
+                    continue
 
-                target_filename = None
-                # Prioritize .srt files matching *ara* or *arabic* in their filename
-                for fname in srt_files:
-                    base_lower = os.path.basename(fname).lower()
-                    if "arabic" in base_lower or "ara" in base_lower:
-                        target_filename = fname
-                        break
+                with zipfile.ZipFile(io.BytesIO(zr.content)) as z:
+                    srt_files = [f for f in z.namelist() if f.lower().endswith(".srt") and not f.startswith("__MACOSX")]
+                    if not srt_files:
+                        log("SUBS", f"No .srt files found in archive from {zip_base}.")
+                        continue
 
-                # If filenames are generic, inspect files to extract the one containing Arabic characters
-                if not target_filename:
-                    for fname in srt_files:
-                        try:
-                            content_sample = z.read(fname)[:50000].decode("utf-8", errors="ignore")
-                            if re.search(r'[\u0600-\u06FF]', content_sample):
-                                target_filename = fname
-                                break
-                        except Exception:
-                            continue
+                    selected_text = None
+                    selected_encoding = None
+                    target_filename = None
 
-                if not target_filename:
-                    log("SUBS", f"None of the subtitle files in {slug}.zip contain Arabic characters. Rejecting.")
-                    return None
+                    # Prioritize .srt files matching *ara* or *arabic* in their filename
+                    sorted_files = sorted(srt_files, key=lambda x: 0 if ("arabic" in x.lower() or "ara" in x.lower()) else 1)
+                    for fname in sorted_files:
+                        f_bytes = z.read(fname)
+                        decoded_text, detected_enc = decode_arabic_subtitle(f_bytes)
+                        if decoded_text:
+                            selected_text = decoded_text
+                            selected_encoding = detected_enc
+                            target_filename = fname
+                            break
 
-                out_srt = os.path.join(subs_dir, f"{imdb_id}_ara.srt")
-                with open(out_srt, "wb") as sf:
-                    sf.write(z.read(target_filename))
+                    if not selected_text:
+                        log("SUBS", f"None of the subtitle files in {slug}.zip contain Arabic characters across tested encodings.")
+                        continue
 
-                # 4. Arabic Content Sanity Check (Unicode Regex)
-                try:
-                    with open(out_srt, 'r', encoding='utf-8', errors='ignore') as f:
-                        sample_text = f.read(50000)
-                    if not re.search(r'[\u0600-\u06FF]', sample_text):
-                        log("SUBS", f"❌ Subtitle file '{out_srt}' does NOT contain Arabic characters! Rejecting.")
-                        try:
-                            os.remove(out_srt)
-                        except Exception:
-                            pass
-                        return None
-                except Exception as e:
-                    log("SUBS", f"⚠️ Error validating subtitle content: {e}")
-                    return None
+                    out_srt = os.path.join(subs_dir, f"{imdb_id}_ara.srt")
+                    with open(out_srt, "w", encoding="utf-8", newline="\n") as sf:
+                        sf.write(selected_text)
 
-                log("SUBS", f"✅ Extracted and verified Arabic subtitle -> {os.path.basename(out_srt)}")
-                return out_srt
-    except Exception as e:
-        log("SUBS", f"Failed downloading/extracting Arabic subtitle: {e}")
+                    log("SUBS", f"ℹ️ Subtitle decoded using '{selected_encoding}' and re-encoded to UTF-8.")
+                    log("SUBS", f"✅ Extracted and verified Arabic subtitle -> {os.path.basename(out_srt)}")
+                    return out_srt
+        except Exception as e:
+            log("SUBS", f"Mirror {zip_base} notice: {e}")
+            continue
 
+    log("SUBS", f"Failed downloading or verifying Arabic subtitle for {imdb_id}.")
     return None
 
 def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
     """
     Burn Arabic subtitles directly into video frames (hardsubbing) using FFmpeg.
-    Enforces clean UTF-8 encoding (windows-1256/iso-8859-6 conversion), sanitizes paths,
-    and runs FFmpeg from the subtitle directory to avoid filtergraph path escaping failures.
+    Enforces clean UTF-8 encoding (prioritizing windows-1256/cp1256 conversion before latin1),
+    sanitizes paths, and runs FFmpeg from the subtitle directory to avoid filtergraph path escaping failures.
     """
     if not video_path or not os.path.exists(video_path):
         log("HARDSUB", "Video path is invalid or missing.")
@@ -557,32 +594,20 @@ def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
         log("HARDSUB", "ffmpeg not found in PATH; skipping hardsubbing and using raw video.")
         return video_path
 
-    # 1. Force UTF-8 conversion (detecting windows-1256, iso-8859-6, cp1256, latin1, UTF-8 BOM)
+    # 1. Force UTF-8 conversion testing priority encodings: utf-8-sig, utf-8, cp1256, windows-1256, iso-8859-6
     clean_sub_text = None
-    encodings_to_try = ['utf-8-sig', 'utf-8', 'cp1256', 'windows-1256', 'iso-8859-6', 'latin1']
+    detected_encoding = None
     try:
         with open(srt_path, 'rb') as sf:
             raw_bytes = sf.read()
 
-        for enc in encodings_to_try:
-            try:
-                candidate = raw_bytes.decode(enc)
-                if '-->' in candidate:
-                    clean_sub_text = candidate
-                    break
-            except (UnicodeDecodeError, LookupError):
-                continue
+        clean_sub_text, detected_encoding = decode_arabic_subtitle(raw_bytes)
 
-        if clean_sub_text is None:
-            clean_sub_text = raw_bytes.decode('utf-8', errors='ignore')
-
-        # Remove BOM if present and normalize line endings
-        clean_sub_text = clean_sub_text.lstrip('\ufeff').replace('\r\n', '\n').replace('\r', '\n')
-
-        # Verify subtitle contains actual Arabic Unicode characters (\u0600-\u06FF)
-        if not re.search(r'[\u0600-\u06FF]', clean_sub_text):
-            log("HARDSUB", f"⚠️ Subtitle '{srt_path}' contains no Arabic Unicode characters; using original video.")
+        if not clean_sub_text:
+            log("HARDSUB", f"⚠️ Subtitle '{srt_path}' contains no Arabic Unicode characters across tested encodings; using original video.")
             return video_path
+
+        log("SUBS", f"ℹ️ Subtitle decoded using '{detected_encoding}' and re-encoded to UTF-8.")
     except Exception as e:
         log("HARDSUB", f"⚠️ Error validating subtitle encoding: {e}; falling back to raw video.")
         return video_path
