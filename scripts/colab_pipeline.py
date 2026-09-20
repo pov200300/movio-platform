@@ -501,7 +501,9 @@ def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
         "-c:v", "h264_nvenc",
         "-preset", "p4",
         "-cq", "23",
-        "-c:a", "copy",
+        "-c:a", "aac",
+        "-b:a", "192k",
+        "-filter:a", "volume=1.4",
         output_path
     ]
 
@@ -515,7 +517,9 @@ def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
             "-c:v", "libx264",
             "-preset", "ultrafast",
             "-crf", "22",
-            "-c:a", "copy",
+            "-c:a", "aac",
+            "-b:a", "192k",
+            "-filter:a", "volume=1.4",
             output_path
         ]
         proc_cpu = subprocess.run(cmd_cpu, capture_output=True, text=True)
