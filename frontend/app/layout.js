@@ -1,6 +1,7 @@
 import './globals.css';
 import Navbar from '../components/Navbar';
 import Footer from '../components/Footer';
+import AdScripts from '../components/AdScripts';
 
 export const metadata = {
   title: 'EGYMAX | بوابة المشاهدة الأولى للأفلام والمسلسلات الحصرية',
@@ -27,6 +28,7 @@ export default function RootLayout({ children }) {
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
       </head>
       <body>
+        <AdScripts />
         <Navbar />
         <main className="main-content">
           {children}
