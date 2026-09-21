@@ -2,6 +2,7 @@ import './globals.css';
 import Navbar from '../components/Navbar';
 import Footer from '../components/Footer';
 import AdScripts from '../components/AdScripts';
+import { GoogleAnalytics } from '@next/third-parties/google';
 
 export const metadata = {
   title: 'EGYMAX | بوابة المشاهدة الأولى للأفلام والمسلسلات الحصرية',
@@ -34,6 +35,7 @@ export default function RootLayout({ children }) {
           {children}
         </main>
         <Footer />
+        <GoogleAnalytics gaId="G-RSFGFP8NTZ" />
       </body>
     </html>
   );
