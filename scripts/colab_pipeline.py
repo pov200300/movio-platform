@@ -679,34 +679,85 @@ def probe_video_properties(video_path: str) -> tuple[int, float]:
 
     return source_bitrate, duration
 
-def convert_srt_to_ass(srt_text: str) -> str:
+def apply_ass_style(ass_text: str) -> str:
+    """
+    Ensure the ASS content uses a 1080p reference canvas (PlayResX: 1920, PlayResY: 1080,
+    ScaledBorderAndShadow: yes) and the high-visibility Arabic Style: Default.
+    Injects or replaces Style: Default in both Python-generated and FFmpeg-converted .ass files.
+    """
+    if not ass_text:
+        return ""
+
+    target_style = (
+        "Style: Default,Noto Sans Arabic,50,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,"
+        "1,0,0,0,100,100,0,0,1,2.5,1,2,20,20,45,1"
+    )
+
+    # 1. Update or inject PlayResX, PlayResY, ScaledBorderAndShadow under [Script Info]
+    if "[Script Info]" in ass_text:
+        ass_text = re.sub(r'PlayResX:\s*\d+', 'PlayResX: 1920', ass_text, flags=re.IGNORECASE)
+        ass_text = re.sub(r'PlayResY:\s*\d+', 'PlayResY: 1080', ass_text, flags=re.IGNORECASE)
+        ass_text = re.sub(r'ScaledBorderAndShadow:\s*\w+', 'ScaledBorderAndShadow: yes', ass_text, flags=re.IGNORECASE)
+
+        if "PlayResX:" not in ass_text:
+            ass_text = ass_text.replace("[Script Info]", "[Script Info]\nPlayResX: 1920", 1)
+        if "PlayResY:" not in ass_text:
+            ass_text = ass_text.replace("[Script Info]", "[Script Info]\nPlayResY: 1080", 1)
+        if "ScaledBorderAndShadow:" not in ass_text:
+            ass_text = ass_text.replace("[Script Info]", "[Script Info]\nScaledBorderAndShadow: yes", 1)
+    else:
+        ass_text = f"[Script Info]\nScriptType: v4.00+\nPlayResX: 1920\nPlayResY: 1080\nScaledBorderAndShadow: yes\n\n{ass_text}"
+
+    # 2. Update or inject Style: Default in [V4+ Styles]
+    if re.search(r'^Style:\s*Default,.*$', ass_text, flags=re.MULTILINE):
+        ass_text = re.sub(r'^Style:\s*Default,.*$', target_style, ass_text, flags=re.MULTILINE)
+    elif "[V4+ Styles]" in ass_text:
+        if "Format:" in ass_text:
+            ass_text = re.sub(r'(Format:[^\n]*\n)', rf'\1{target_style}\n', ass_text, count=1)
+        else:
+            ass_text = ass_text.replace("[V4+ Styles]", f"[V4+ Styles]\n{target_style}", 1)
+    else:
+        v4_section = (
+            "\n[V4+ Styles]\n"
+            "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n"
+            f"{target_style}\n\n"
+        )
+        if "[Events]" in ass_text:
+            ass_text = ass_text.replace("[Events]", f"{v4_section}[Events]", 1)
+        else:
+            ass_text = f"{v4_section}{ass_text}"
+
+    return ass_text
+
+def convert_srt_to_ass(srt_text: str, srt_path: str = None) -> str:
     """
     Convert SRT subtitle text to ASS (Advanced SubStation Alpha) format with
-    embedded Arabic styling. Bypasses FFmpeg's SRT demuxer (avformat_open_input)
-    which fails with 'Unable to open' on certain Arabic-encoded subtitle content,
+    embedded Arabic styling on a 1080p virtual canvas. Bypasses FFmpeg's SRT demuxer
+    (avformat_open_input) which fails with 'Unable to open' on certain Arabic-encoded subtitle content,
     by producing a pre-formatted ASS file that libass reads directly via the 'ass' filter.
 
     Resilient against:
+      - Null bytes (\\x00) and UTF-8/16 BOMs (\\ufeff\\ufffe)
       - Windows CRLF (\\r\\n) and old-Mac CR (\\r) line endings
-      - UTF-8 BOM (\\ufeff) and UTF-16 BOM (\\ufffe)
       - Invisible Unicode directional marks (RLM, LRM, ALM) & zero-width controls
       - Flexible timestamp arrows (--> , -> , —> , –>)
       - Timestamp separators: both comma (00:01:23,456) and period (00:01:23.456)
       - Variable-length millisecond fields (1-3 digits)
       - HTML formatting tags (<i>, <b>, <font>)
       - Fallback sequential line-by-line parser for broken block formatting
+      - Native FFmpeg subtitle converter CLI as unbreakable fallback
     """
     if not srt_text:
         return ""
 
-    # ── 0. Pre-clean: strip BOM, normalize newlines, purge invisible bidi & zero-width chars ──
-    cleaned = srt_text.lstrip("\ufeff\ufffe").replace("\r\n", "\n").replace("\r", "\n")
+    # ── 0. Pre-clean: strip null bytes, BOMs, normalize newlines, purge bidi marks ──
+    raw_text = srt_text.replace("\x00", "").lstrip("\ufeff\ufffe").replace("\r\n", "\n").replace("\r", "\n")
     bidi_pattern = re.compile(r"[\u200e\u200f\u061c\u200b-\u200d\u202a-\u202e\u2066-\u2069\ufeff]")
-    cleaned = bidi_pattern.sub("", cleaned).strip()
+    cleaned = bidi_pattern.sub("", raw_text).strip()
     if not cleaned:
         return ""
 
-    # ── ASS header with embedded Arabic style ──
+    # ── ASS header with embedded Arabic style on a 1080p reference canvas ──
     header_lines = [
         "[Script Info]",
         "ScriptType: v4.00+",
@@ -717,7 +768,7 @@ def convert_srt_to_ass(srt_text: str) -> str:
         "",
         "[V4+ Styles]",
         "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
-        "Style: Default,Noto Sans Arabic,24,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,0,2,10,10,25,1",
+        "Style: Default,Noto Sans Arabic,50,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,1,0,0,0,100,100,0,0,1,2.5,1,2,20,20,45,1",
         "",
         "[Events]",
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
@@ -808,10 +859,49 @@ def convert_srt_to_ass(srt_text: str) -> str:
 
         _append_seq_dialogue()
 
-    if not dialogues:
-        return ""
+    if dialogues:
+        return ass_header + '\n'.join(dialogues) + '\n'
 
-    return ass_header + '\n'.join(dialogues) + '\n'
+    # ── Fallback Native FFmpeg Engine: if Python regex extracted 0 dialogues ──
+    ffmpeg_bin = shutil.which("ffmpeg")
+    if ffmpeg_bin:
+        import tempfile
+        temp_src = srt_path
+        need_rm = False
+        if not temp_src or not os.path.exists(temp_src):
+            try:
+                with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".srt", delete=False) as tf:
+                    tf.write(cleaned)
+                    temp_src = tf.name
+                need_rm = True
+            except Exception:
+                temp_src = None
+
+        if temp_src and os.path.exists(temp_src):
+            temp_ass = temp_src + ".ass"
+            try:
+                subprocess.run(
+                    [ffmpeg_bin, "-y", "-i", temp_src, temp_ass],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False
+                )
+                if os.path.exists(temp_ass) and os.path.getsize(temp_ass) > 0:
+                    with open(temp_ass, "r", encoding="utf-8", errors="replace") as af:
+                        raw_ass = af.read()
+                    if "Dialogue:" in raw_ass:
+                        return apply_ass_style(raw_ass)
+            except Exception:
+                pass
+            finally:
+                if need_rm and temp_src and os.path.exists(temp_src):
+                    try: os.remove(temp_src)
+                    except Exception: pass
+                if os.path.exists(temp_ass):
+                    try: os.remove(temp_ass)
+                    except Exception: pass
+
+    return ""
 
 def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
     """
@@ -870,13 +960,36 @@ def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
             except Exception:
                 pass
 
+    # Stage cleaned SRT file in case native FFmpeg conversion is needed
+    staged_clean_srt = os.path.join(staging_dir, "clean_sub.srt")
+    try:
+        with open(staged_clean_srt, 'w', encoding='utf-8', newline='\n') as csf:
+            csf.write(clean_sub_text)
+    except Exception:
+        staged_clean_srt = srt_path
+
     # Convert SRT → ASS format (bypasses FFmpeg SRT demuxer 'Unable to open' errors)
-    ass_content = convert_srt_to_ass(clean_sub_text)
+    ass_content = convert_srt_to_ass(clean_sub_text, staged_clean_srt)
+
+    # If Python parser and internal fallback yielded 0 dialogues, run native FFmpeg CLI directly
+    if not ass_content or 'Dialogue:' not in ass_content:
+        log("HARDSUB", "⚠️ Python parser yielded 0 dialogues; invoking native FFmpeg CLI conversion engine...")
+        try:
+            subprocess.run(["ffmpeg", "-y", "-i", staged_clean_srt, staged_sub], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if os.path.exists(staged_sub) and os.path.getsize(staged_sub) > 0:
+                with open(staged_sub, "r", encoding="utf-8", errors="replace") as af:
+                    ass_content = apply_ass_style(af.read())
+                with open(staged_sub, "w", encoding="utf-8", newline="\n") as out_sf:
+                    out_sf.write(ass_content)
+                log("HARDSUB", f"✅ Native FFmpeg subtitle conversion succeeded: {staged_sub}")
+        except Exception as e:
+            log("HARDSUB", f"⚠️ Native FFmpeg conversion error: {e}")
+
     if not ass_content or 'Dialogue:' not in ass_content:
         log("HARDSUB", "⚠️ SRT→ASS conversion produced no valid subtitle entries; using original video.")
         return video_path
 
-    # Stage the ASS subtitle file inside staging_dir
+    # Stage the ASS subtitle file inside staging_dir (if not already written)
     try:
         with open(staged_sub, 'w', encoding='utf-8', newline='\n') as out_sf:
             out_sf.write(ass_content)
@@ -895,11 +1008,10 @@ def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
         log("HARDSUB", f"Symlink notice: {e}; referencing input path directly.")
         ffmpeg_input = video_abs_path
 
-    # 3. ASS subtitle filter (bypasses FFmpeg's avformat_open_input SRT demuxer;
-    #    style is embedded in the ASS header — no force_style option needed)
+    # 3. ASS subtitle filter with dimension and pixel format stabilization
     sub_abs_path = os.path.abspath(staged_sub).replace("\\", "/")
     sub_path_filter = sub_abs_path.replace(":", "\\:")
-    subtitles_filter = f"scale=trunc(iw/2)*2:trunc(ih/2)*2,ass='{sub_path_filter}'"
+    subtitles_filter = f"scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p,ass='{sub_path_filter}'"
 
     # 4. Strict Bitrate & Audio Budgeting (guarantee final container strictly under 4200 MB)
     source_bitrate, duration = probe_video_properties(video_abs_path)
@@ -943,13 +1055,13 @@ def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
     proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=staging_dir)
     if proc.returncode != 0:
         err_snippet = proc.stderr[-300:] if proc.stderr else ""
-        log("HARDSUB", f"NVENC hardsubbing error ({proc.returncode}): {err_snippet}. Attempting CPU fallback (libx264 faster / crf {cq_val})...")
+        log("HARDSUB", f"NVENC hardsubbing error ({proc.returncode}): {err_snippet}. Attempting CPU fallback (libx264 ultrafast / crf {cq_val})...")
         cmd_cpu = [
             "ffmpeg", "-y",
             "-i", ffmpeg_input,
             "-vf", subtitles_filter,
             "-c:v", "libx264",
-            "-preset", "faster",
+            "-preset", "ultrafast",
             "-crf", str(cq_val),
             "-b:v", f"{target_bitrate}k",
             "-maxrate", f"{max_rate}k",
