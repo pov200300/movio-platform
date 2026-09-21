@@ -689,7 +689,7 @@ def apply_ass_style(ass_text: str) -> str:
         return ""
 
     target_style = (
-        "Style: Default,Noto Sans Arabic,60,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,"
+        "Style: Default,Noto Sans Arabic,66,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,"
         "1,0,0,0,100,100,0,0,1,3.2,1,2,20,20,45,1"
     )
 
@@ -768,7 +768,7 @@ def convert_srt_to_ass(srt_text: str, srt_path: str = None) -> str:
         "",
         "[V4+ Styles]",
         "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
-        "Style: Default,Noto Sans Arabic,60,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,1,0,0,0,100,100,0,0,1,3.2,1,2,20,20,45,1",
+        "Style: Default,Noto Sans Arabic,66,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,1,0,0,0,100,100,0,0,1,3.2,1,2,20,20,45,1",
         "",
         "[Events]",
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
