@@ -685,7 +685,21 @@ def convert_srt_to_ass(srt_text: str) -> str:
     embedded Arabic styling. Bypasses FFmpeg's SRT demuxer (avformat_open_input)
     which fails with 'Unable to open' on certain Arabic-encoded subtitle content,
     by producing a pre-formatted ASS file that libass reads directly via the 'ass' filter.
+
+    Resilient against:
+      - Windows CRLF (\\r\\n) and old-Mac CR (\\r) line endings
+      - UTF-8 BOM (\\ufeff) at file start
+      - Timestamp separators: both comma (00:01:23,456) and period (00:01:23.456)
+      - Variable-length millisecond fields (1-3 digits)
+      - HTML formatting tags (<i>, <b>, <font>)
+      - Invisible Unicode joiners (ZWNJ, ZWJ, ZWNBSP, etc.)
     """
+    # ── 0. Pre-clean: strip BOM, normalize ALL line endings to Unix LF ──
+    cleaned = srt_text.lstrip("\ufeff\ufffe").replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not cleaned:
+        return ""
+
+    # ── ASS header with embedded Arabic style ──
     header_lines = [
         "[Script Info]",
         "ScriptType: v4.00+",
@@ -703,7 +717,30 @@ def convert_srt_to_ass(srt_text: str) -> str:
     ]
     ass_header = '\n'.join(header_lines) + '\n'
 
-    blocks = re.split(r'\n\s*\n', srt_text.strip())
+    # ── Flexible timestamp pattern (1-2 digit hours, comma OR period, 1-3 digit ms) ──
+    time_pattern = re.compile(
+        r'(\d{1,2}:\d{2}:\d{2}[,.]\d{1,3})\s*-->\s*(\d{1,2}:\d{2}:\d{2}[,.]\d{1,3})'
+    )
+
+    def _srt_ts_to_ass(ts: str) -> str:
+        """Convert SRT timestamp (HH:MM:SS,mmm or H:MM:SS.mm) to ASS (H:MM:SS.cc)."""
+        ts = ts.replace(',', '.')
+        parts = ts.split(':')
+        h, mi = int(parts[0]), int(parts[1])
+        sec_parts = parts[2].split('.')
+        s = int(sec_parts[0])
+        ms_raw = sec_parts[1] if len(sec_parts) > 1 else '0'
+        cs = int(ms_raw.ljust(3, '0')[:3]) // 10
+        return f"{h}:{mi:02d}:{s:02d}.{cs:02d}"
+
+    def _clean_line(line: str) -> str:
+        """Strip HTML tags and invisible Unicode control characters from a subtitle line."""
+        c = re.sub(r'<[^>]+>', '', line.strip())
+        c = re.sub(r'[\u200b\u200c\u200d\u200e\u200f\ufeff\u00ad]', '', c)
+        return c
+
+    # ── Primary parser: split by blank lines into blocks ──
+    blocks = re.split(r'\n\s*\n', cleaned)
     dialogues = []
 
     for block in blocks:
@@ -711,48 +748,42 @@ def convert_srt_to_ass(srt_text: str) -> str:
         if len(lines) < 2:
             continue
 
-        # Find the timing line (contains '-->')
-        timing_line = None
+        tm = time_pattern.search(block)
+        if not tm:
+            continue
+
+        start_ass = _srt_ts_to_ass(tm.group(1))
+        end_ass = _srt_ts_to_ass(tm.group(2))
+
+        # Find timing line index to extract text after it
         timing_idx = -1
         for i, line in enumerate(lines):
             if '-->' in line:
-                timing_line = line.strip()
                 timing_idx = i
                 break
 
-        if not timing_line or timing_idx < 0:
+        if timing_idx < 0:
             continue
 
-        # Parse: 00:01:23,456 --> 00:01:25,789
-        m = re.match(
-            r'(\d+):(\d+):(\d+)[,.](\d+)\s*-->\s*(\d+):(\d+):(\d+)[,.](\d+)',
-            timing_line
-        )
-        if not m:
-            continue
-
-        h1, m1, s1, ms1_raw, h2, m2, s2, ms2_raw = m.groups()
-        # Convert milliseconds to centiseconds for ASS format (H:MM:SS.cc)
-        cs1 = int(ms1_raw[:3].ljust(3, '0')) // 10
-        cs2 = int(ms2_raw[:3].ljust(3, '0')) // 10
-
-        start_t = f"{int(h1)}:{int(m1):02d}:{int(s1):02d}.{cs1:02d}"
-        end_t = f"{int(h2)}:{int(m2):02d}:{int(s2):02d}.{cs2:02d}"
-
-        # Extract subtitle text (everything after the timing line)
-        text_parts = []
-        for tl in lines[timing_idx + 1:]:
-            cleaned = re.sub(r'<[^>]+>', '', tl.strip())  # Strip HTML tags
-            cleaned = re.sub(r'[\u200b\u200c\u200d\u200e\u200f\ufeff\u00ad]', '', cleaned)  # Strip invisible chars
-            if cleaned:
-                text_parts.append(cleaned)
-
+        text_parts = [_clean_line(tl) for tl in lines[timing_idx + 1:] if _clean_line(tl)]
         if not text_parts:
             continue
 
-        # In ASS, multi-line text uses \N as line break
         text = '\\N'.join(text_parts)
-        dialogues.append(f"Dialogue: 0,{start_t},{end_t},Default,,0,0,0,,{text}")
+        dialogues.append(f"Dialogue: 0,{start_ass},{end_ass},Default,,0,0,0,,{text}")
+
+    # ── Fallback: if block parser found nothing, scan raw text with regex ──
+    if not dialogues:
+        for fm in time_pattern.finditer(cleaned):
+            start_ass = _srt_ts_to_ass(fm.group(1))
+            end_ass = _srt_ts_to_ass(fm.group(2))
+            after = cleaned[fm.end():]
+            text_block = re.split(r'\n\d+\s*\n|\n\s*\n', after, maxsplit=1)[0].strip()
+            if text_block:
+                parts = [_clean_line(l) for l in text_block.split('\n') if _clean_line(l)]
+                if parts:
+                    text = '\\N'.join(parts)
+                    dialogues.append(f"Dialogue: 0,{start_ass},{end_ass},Default,,0,0,0,,{text}")
 
     if not dialogues:
         return ""
