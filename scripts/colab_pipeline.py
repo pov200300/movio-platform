@@ -1439,6 +1439,27 @@ def run_pipeline(movie_title: str, release_year: str = None, imdb_id: str = None
 
     log("PIPELINE", f"Subtitling status: {arabic_sub_status}")
 
+    # Dynamically rename final video so DoodStream registers the clean movie title
+    title_en = meta.get("title") or movie_title or "Movie"
+    release_year = meta.get("year") or ""
+    clean_title = re.sub(r'[^\w\s-]', '', title_en).strip().replace(' ', '.')
+    if release_year:
+        final_filename = f"{clean_title}.{release_year}.1080p.Arabic.Hardsub.mp4"
+    else:
+        final_filename = f"{clean_title}.1080p.Arabic.Hardsub.mp4"
+    final_filepath = os.path.join(os.path.dirname(burned_video_path), final_filename)
+
+    if os.path.exists(burned_video_path):
+        if burned_video_path != final_filepath:
+            if os.path.exists(final_filepath):
+                try:
+                    os.remove(final_filepath)
+                except Exception:
+                    pass
+            os.rename(burned_video_path, final_filepath)
+            log("PIPELINE", f"Renamed upload file for DoodStream: {final_filename}")
+        burned_video_path = final_filepath
+
     # 6. Upload burned video to DoodStream with Retry & Server Re-allocation
     if not verify_video_integrity(burned_video_path):
         raise RuntimeError(f"Downloaded file is corrupted or incomplete; aborting upload. ({burned_video_path})")
