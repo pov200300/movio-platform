@@ -186,13 +186,22 @@ export function parseMovieData(post) {
   }
   if (!year) year = new Date().getFullYear().toString();
 
-  // 2. Rating
-  let rating = post.meta?.imdb_rating;
+  // 2. Rating - Extract and preserve exact decimal rating (e.g. "8.5")
+  let rating = post.meta?.imdb_rating || post.meta?.rating || post.meta?.vote_average || post.meta_input?.imdb_rating;
   if (!rating) {
     const ratingMatch = content.match(/<strong>Rating:<\/strong>\s*([0-9.]+)/i) || content.match(/★\s*([0-9.]+)/);
     if (ratingMatch) rating = ratingMatch[1];
   }
-  if (!rating) rating = '8.0';
+  if (rating) {
+    const num = parseFloat(rating);
+    if (!isNaN(num) && num > 0) {
+      rating = num.toFixed(1);
+    } else {
+      rating = '7.5';
+    }
+  } else {
+    rating = '7.5';
+  }
 
   // 3. Quality Badge
   let quality = post.meta?.quality;

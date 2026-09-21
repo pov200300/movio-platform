@@ -101,6 +101,29 @@ def translate_to_arabic(text: str) -> str:
 
     return text
 
+def format_imdb_rating(raw_val) -> str:
+    """
+    Format and preserve IMDb rating strictly as a decimal string with one decimal place (e.g. '8.5').
+    Prevents truncation to integers (avoiding int(), Math.round).
+    """
+    if raw_val is None:
+        return ""
+    try:
+        if isinstance(raw_val, str):
+            clean = raw_val.strip()
+            match = re.search(r'(\d+(?:\.\d+)?)', clean)
+            if match:
+                f_val = float(match.group(1))
+                if 0.0 < f_val <= 10.0:
+                    return f"{f_val:.1f}"
+        elif isinstance(raw_val, (int, float)):
+            f_val = float(raw_val)
+            if 0.0 < f_val <= 10.0:
+                return f"{f_val:.1f}"
+    except (ValueError, TypeError):
+        pass
+    return ""
+
 def get_movie_metadata(movie_title: str, release_year: str = None, imdb_id: str = None, api_key: str = TMDB_API_KEY) -> dict:
     """
     Fetch verified metadata, Arabic title, Arabic overview (with deep-translator fallback),
@@ -138,7 +161,7 @@ def get_movie_metadata(movie_title: str, release_year: str = None, imdb_id: str 
 
     # Initial defaults
     genres = "Action, Drama"
-    tmdb_rating = "7.5"
+    tmdb_rating = ""
     overview_en = "No synopsis available."
     overview_ar = ""
     title_ar = movie_title
@@ -156,7 +179,8 @@ def get_movie_metadata(movie_title: str, release_year: str = None, imdb_id: str 
         title_ar = final_title
         final_year = (movie_item.get("release_date") or "")[:4] or final_year
         overview_en = movie_item.get("overview") or overview_en
-        tmdb_rating = str(round(movie_item.get("vote_average", 7.5), 1))
+        if movie_item.get("vote_average") is not None:
+            tmdb_rating = format_imdb_rating(movie_item.get("vote_average"))
         
         poster_path = movie_item.get("poster_path")
         backdrop_path = movie_item.get("backdrop_path")
@@ -172,6 +196,12 @@ def get_movie_metadata(movie_title: str, release_year: str = None, imdb_id: str 
                 # Query TMDB with language=ar-SA and append_to_response=credits
                 detail_ar_url = f"https://api.themoviedb.org/3/movie/{tmdb_id}?api_key={api_key}&language=ar-SA&append_to_response=credits"
                 d_ar = requests.get(detail_ar_url, headers=HEADERS, timeout=15).json()
+
+                # Authoritative decimal rating from detailed endpoint
+                if d_ar.get("vote_average") is not None:
+                    d_rating = format_imdb_rating(d_ar.get("vote_average"))
+                    if d_rating:
+                        tmdb_rating = d_rating
 
                 if d_ar.get("title"):
                     title_ar = d_ar.get("title")
@@ -199,6 +229,18 @@ def get_movie_metadata(movie_title: str, release_year: str = None, imdb_id: str 
                 extracted_imdb_id = d_ar.get("imdb_id") or extracted_imdb_id
             except Exception as e:
                 log("TMDB", f"Arabic details lookup notice: {e}")
+
+    # Fallback to OMDb API if rating still empty and IMDb ID is known
+    if not tmdb_rating and extracted_imdb_id:
+        try:
+            omdb_res = requests.get(f"https://www.omdbapi.com/?i={extracted_imdb_id}&apikey=trilogy", headers=HEADERS, timeout=8).json()
+            if omdb_res.get("Response") == "True" and omdb_res.get("imdbRating"):
+                tmdb_rating = format_imdb_rating(omdb_res.get("imdbRating"))
+        except Exception:
+            pass
+
+    if not tmdb_rating:
+        tmdb_rating = "7.5"
 
     # If overview_ar is empty, fallback to English overview translated to Arabic via deep-translator
     if not overview_ar:
@@ -238,12 +280,13 @@ def get_movie_metadata(movie_title: str, release_year: str = None, imdb_id: str 
         "cast_names": cast_names,
         "seo_description": seo_intro,
         "rating": tmdb_rating,
+        "imdb_rating": tmdb_rating,
         "genres": genres,
         "poster_url": poster_url,
         "backdrop_url": backdrop_url,
         "imdb_id": extracted_imdb_id,
     }
-    log("TMDB", f"Metadata ready: '{meta['title']}' ({meta['year']}) | Title AR: '{meta['title_ar']}' | ★ {meta['rating']} | Cast: {cast_names or 'N/A'}")
+    log("TMDB", f"Metadata ready: '{meta['title']}' ({meta['year']}) | Title AR: '{meta['title_ar']}' | ★ {meta['imdb_rating']} | Cast: {cast_names or 'N/A'}")
     return meta
 
 fetch_tmdb_metadata = get_movie_metadata
@@ -320,12 +363,17 @@ def fetch_yts_torrent(movie_title: str, release_year: str = None, imdb_id: str =
     tracker_args = "&".join([f"tr={quote(t)}" for t in trackers])
     magnet_uri = f"magnet:?xt=urn:btih:{torrent_hash}&dn={quote(target_movie.get('title'))}&{tracker_args}"
 
+    yts_rating = format_imdb_rating(target_movie.get("rating"))
+    if yts_rating:
+        log("YTS", f"Extracted IMDb Rating from YTS: ★ {yts_rating}")
+
     log("YTS", f"Selected Torrent: {quality} ({selected_torrent.get('size')}) Hash: {torrent_hash[:10]}...")
     return {
         "quality": quality,
         "torrent_url": torrent_url,
         "magnet_uri": magnet_uri,
         "size": selected_torrent.get("size", "Unknown"),
+        "imdb_rating": yts_rating,
     }
 
 # =============================================================================
@@ -1370,10 +1418,17 @@ def publish_movie_to_pantheon(meta: dict, embed_url: str, quality: str = "1080p"
     seo_intro_paragraph = meta.get("seo_description") or f"مشاهدة وتحميل فيلم {meta.get('title_ar', meta['title'])} ({meta['year']}) مترجم كامل بجودة 1080p BluRay عالية أون لاين."
     story_paragraph = meta.get("overview_ar") or meta.get("overview") or "تدور أحداث الفيلم في إطار مشوق ومثير مليء بالأحداث غير المتوقعة والمغامرات الشيقة."
 
+    # Format and preserve IMDb rating strictly as a decimal string (e.g. '8.5')
+    imdb_rating = format_imdb_rating(meta.get("imdb_rating") or meta.get("rating"))
+    if not imdb_rating:
+        imdb_rating = "7.5"
+
     content = f"""
 <div class="video-container" style="position: relative; padding-bottom: 56.25%; height: 0; overflow: hidden; max-width: 100%; border-radius: 12px; margin-bottom: 1.5rem;">
     <iframe src="{embed_url}" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: 0;" allowfullscreen="true" scrolling="no" frameborder="0"></iframe>
 </div>
+
+<p>★ <strong>Rating:</strong> {imdb_rating} / 10 | <strong>Release Year:</strong> {meta.get('year', '2026')} | <strong>Quality:</strong> {quality}</p>
 
 <div class="movie-seo-intro">
   <p>{seo_intro_paragraph}</p>
@@ -1391,23 +1446,29 @@ def publish_movie_to_pantheon(meta: dict, embed_url: str, quality: str = "1080p"
     if category_ids:
         log("WP", f"Linked category IDs: {category_ids}")
 
+    custom_fields = {
+        "imdb_rating": imdb_rating,
+        "rating": imdb_rating,
+        "vote_average": imdb_rating,
+        "_imdb_rating": imdb_rating,
+        "embed_url": embed_url,
+        "dood_embed": embed_url,
+        "video_year": str(meta.get("year", "2026")),
+        "quality": quality,
+        "backdrop_url": meta.get("backdrop_url") or "",
+        "genres": meta.get("genres", ""),
+        "overview_ar": meta.get("overview_ar", ""),
+        "cast": ", ".join(meta.get("cast", [])) if isinstance(meta.get("cast"), list) else str(meta.get("cast", "")),
+        "title_ar": meta.get("title_ar", ""),
+        "seo_description": seo_intro_paragraph
+    }
+
     post_payload = {
         "title": title,
         "content": content,
         "status": "publish",
-        "meta": {
-            "embed_url": embed_url,
-            "dood_embed": embed_url,
-            "video_year": str(meta.get("year", "2026")),
-            "imdb_rating": str(meta.get("rating", "8.0")),
-            "quality": quality,
-            "backdrop_url": meta.get("backdrop_url") or "",
-            "genres": meta.get("genres", ""),
-            "overview_ar": meta.get("overview_ar", ""),
-            "cast": ", ".join(meta.get("cast", [])) if isinstance(meta.get("cast"), list) else str(meta.get("cast", "")),
-            "title_ar": meta.get("title_ar", ""),
-            "seo_description": seo_intro_paragraph
-        }
+        "meta": custom_fields,
+        "meta_input": custom_fields
     }
     if category_ids:
         post_payload["categories"] = category_ids
@@ -1451,6 +1512,12 @@ def run_pipeline(movie_title: str, release_year: str = None, imdb_id: str = None
     # 2. Fetch YTS Torrent
     target_imdb = meta.get("imdb_id") or imdb_id
     torrent_info = fetch_yts_torrent(meta["title"], meta["year"], target_imdb, preferred_quality)
+
+    # Synchronize authoritative IMDb rating from YTS if present
+    if torrent_info.get("imdb_rating"):
+        meta["rating"] = torrent_info["imdb_rating"]
+        meta["imdb_rating"] = torrent_info["imdb_rating"]
+        log("PIPELINE", f"Synced authoritative IMDb rating from YTS: ★ {meta['imdb_rating']}")
 
     # 3. High-Speed aria2c Download with Pre-Sanitization
     download_source = torrent_info["torrent_url"] or torrent_info["magnet_uri"]
@@ -1516,7 +1583,7 @@ def run_pipeline(movie_title: str, release_year: str = None, imdb_id: str = None
     print("\n" + "=" * 75)
     print("  PIPELINE COMPLETED SUCCESSFULLY!")
     print(f"  Title:      {meta['title']} ({meta['year']})")
-    print(f"  Rating:     ★ {meta['rating']}")
+    print(f"  Rating:     ★ {meta.get('imdb_rating') or meta.get('rating')}")
     print(f"  Arabic Sub: {arabic_sub_status}")
     print(f"  Embed:      {embed_url}")
     print(f"  Live Post:  {post_data.get('link')}")

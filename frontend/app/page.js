@@ -1,4 +1,4 @@
-import { getLatestMovies } from '../lib/api';
+import { getLatestMovies, parseMovieData } from '../lib/api';
 import HeroSection from '../components/HeroSection';
 import MovieCard from '../components/MovieCard';
 import Link from 'next/link';
@@ -25,8 +25,8 @@ export default async function Home() {
   const featuredMovie = latestMovies[0];
   const topRatedMovies = [...latestMovies]
     .sort((a, b) => {
-      const rA = parseFloat(a.meta?.imdb_rating || '7.5');
-      const rB = parseFloat(b.meta?.imdb_rating || '7.5');
+      const rA = parseFloat(parseMovieData(a).rating || '7.5');
+      const rB = parseFloat(parseMovieData(b).rating || '7.5');
       return rB - rA;
     })
     .slice(0, 6);

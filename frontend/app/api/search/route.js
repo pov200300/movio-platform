@@ -78,7 +78,7 @@ export async function GET(request) {
           title_ar: titleAr,
           title_en: titleEn,
           year: parsed.year || '2026',
-          rating: parsed.rating || '8.0',
+          rating: parsed.rating || '7.5',
           poster_url: parsed.posterUrl || '/placeholder.svg',
           quality: parsed.quality || '1080p',
         });
