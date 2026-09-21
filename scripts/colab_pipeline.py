@@ -756,7 +756,7 @@ def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
         ffmpeg_input = video_abs_path
 
     # 3. Robust subtitle filter configuration (executed with cwd=staging_dir)
-    force_style = "Fontname=Noto Sans Arabic,Alignment=2,MarginV=25,FontSize=24,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=0,Shadow=0"
+    force_style = "Fontname=Noto Sans Arabic,Alignment=2,MarginV=25,FontSize=24,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BackColour=&H00000000,BorderStyle=1,Outline=0,Shadow=0"
     sub_abs_path = os.path.abspath(staged_sub).replace("\\", "/")
     sub_path_filter = sub_abs_path.replace(":", "\\:")
     subtitles_filter = f"scale=trunc(iw/2)*2:trunc(ih/2)*2,subtitles='{sub_path_filter}':force_style='{force_style}'"

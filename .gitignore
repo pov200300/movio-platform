@@ -36,14 +36,18 @@ __pycache__/
 # Local media, downloads & torrents
 downloads/
 download/
+staging/
+staging_temp/
 /content/
 *.mp4
 *.mkv
 *.avi
 *.webm
+*.srt
 *.torrent
 *.part
 *.aria2
+*.zip
 
 # System & IDE files
 .DS_Store

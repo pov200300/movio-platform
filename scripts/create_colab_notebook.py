@@ -619,7 +619,7 @@ notebook = {
                 "        ffmpeg_input = video_abs\n",
                 "\n",
                 "    # 3. Robust subtitle filter configuration (executed strictly with cwd=staging_dir)\n",
-                "    force_style = \"Fontname=Noto Sans Arabic,Alignment=2,MarginV=25,FontSize=24,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=0,Shadow=0\"\n",
+                "    force_style = \"Fontname=Noto Sans Arabic,Alignment=2,MarginV=25,FontSize=24,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BackColour=&H00000000,BorderStyle=1,Outline=0,Shadow=0\"\n",
                 "    sub_abs = os.path.abspath(staged_sub).replace('\\\\', '/')\n",
                 "    sub_filter_path = sub_abs.replace(':', '\\\\:')\n",
                 "    subtitles_filter = f\"scale=trunc(iw/2)*2:trunc(ih/2)*2,subtitles='{sub_filter_path}':force_style='{force_style}'\"\n",
