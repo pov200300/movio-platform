@@ -679,6 +679,86 @@ def probe_video_properties(video_path: str) -> tuple[int, float]:
 
     return source_bitrate, duration
 
+def convert_srt_to_ass(srt_text: str) -> str:
+    """
+    Convert SRT subtitle text to ASS (Advanced SubStation Alpha) format with
+    embedded Arabic styling. Bypasses FFmpeg's SRT demuxer (avformat_open_input)
+    which fails with 'Unable to open' on certain Arabic-encoded subtitle content,
+    by producing a pre-formatted ASS file that libass reads directly via the 'ass' filter.
+    """
+    header_lines = [
+        "[Script Info]",
+        "ScriptType: v4.00+",
+        "PlayResX: 1920",
+        "PlayResY: 1080",
+        "WrapStyle: 0",
+        "ScaledBorderAndShadow: yes",
+        "",
+        "[V4+ Styles]",
+        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
+        "Style: Default,Noto Sans Arabic,24,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,0,2,10,10,25,1",
+        "",
+        "[Events]",
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
+    ]
+    ass_header = '\n'.join(header_lines) + '\n'
+
+    blocks = re.split(r'\n\s*\n', srt_text.strip())
+    dialogues = []
+
+    for block in blocks:
+        lines = block.strip().split('\n')
+        if len(lines) < 2:
+            continue
+
+        # Find the timing line (contains '-->')
+        timing_line = None
+        timing_idx = -1
+        for i, line in enumerate(lines):
+            if '-->' in line:
+                timing_line = line.strip()
+                timing_idx = i
+                break
+
+        if not timing_line or timing_idx < 0:
+            continue
+
+        # Parse: 00:01:23,456 --> 00:01:25,789
+        m = re.match(
+            r'(\d+):(\d+):(\d+)[,.](\d+)\s*-->\s*(\d+):(\d+):(\d+)[,.](\d+)',
+            timing_line
+        )
+        if not m:
+            continue
+
+        h1, m1, s1, ms1_raw, h2, m2, s2, ms2_raw = m.groups()
+        # Convert milliseconds to centiseconds for ASS format (H:MM:SS.cc)
+        cs1 = int(ms1_raw[:3].ljust(3, '0')) // 10
+        cs2 = int(ms2_raw[:3].ljust(3, '0')) // 10
+
+        start_t = f"{int(h1)}:{int(m1):02d}:{int(s1):02d}.{cs1:02d}"
+        end_t = f"{int(h2)}:{int(m2):02d}:{int(s2):02d}.{cs2:02d}"
+
+        # Extract subtitle text (everything after the timing line)
+        text_parts = []
+        for tl in lines[timing_idx + 1:]:
+            cleaned = re.sub(r'<[^>]+>', '', tl.strip())  # Strip HTML tags
+            cleaned = re.sub(r'[\u200b\u200c\u200d\u200e\u200f\ufeff\u00ad]', '', cleaned)  # Strip invisible chars
+            if cleaned:
+                text_parts.append(cleaned)
+
+        if not text_parts:
+            continue
+
+        # In ASS, multi-line text uses \N as line break
+        text = '\\N'.join(text_parts)
+        dialogues.append(f"Dialogue: 0,{start_t},{end_t},Default,,0,0,0,,{text}")
+
+    if not dialogues:
+        return ""
+
+    return ass_header + '\n'.join(dialogues) + '\n'
+
 def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
     """
     Burn Arabic subtitles directly into video frames (hardsubbing) using FFmpeg.
@@ -725,7 +805,7 @@ def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
     os.makedirs(staging_dir, exist_ok=True)
 
     staged_input = os.path.join(staging_dir, "input_video.mp4")
-    staged_sub = os.path.join(staging_dir, "sub.srt")
+    staged_sub = os.path.join(staging_dir, "sub.ass")
     staged_output = os.path.join(staging_dir, "output_subbed.mp4")
 
     # Clean previous staging artifacts if present
@@ -736,11 +816,17 @@ def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
             except Exception:
                 pass
 
-    # Stage the subtitle file directly inside staging_dir
+    # Convert SRT → ASS format (bypasses FFmpeg SRT demuxer 'Unable to open' errors)
+    ass_content = convert_srt_to_ass(clean_sub_text)
+    if not ass_content or 'Dialogue:' not in ass_content:
+        log("HARDSUB", "⚠️ SRT→ASS conversion produced no valid subtitle entries; using original video.")
+        return video_path
+
+    # Stage the ASS subtitle file inside staging_dir
     try:
         with open(staged_sub, 'w', encoding='utf-8', newline='\n') as out_sf:
-            out_sf.write(clean_sub_text)
-        log("HARDSUB", f"Staged subtitle written in clean UTF-8: {staged_sub}")
+            out_sf.write(ass_content)
+        log("HARDSUB", f"Staged subtitle (SRT→ASS converted, {len(ass_content)} bytes): {staged_sub}")
     except Exception as e:
         log("HARDSUB", f"⚠️ Could not write {staged_sub}: {e}")
         return video_path
@@ -755,11 +841,11 @@ def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
         log("HARDSUB", f"Symlink notice: {e}; referencing input path directly.")
         ffmpeg_input = video_abs_path
 
-    # 3. Robust subtitle filter configuration (executed with cwd=staging_dir)
-    force_style = "Fontname=Noto Sans Arabic,Alignment=2,MarginV=25,FontSize=24,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BackColour=&H00000000,BorderStyle=1,Outline=0,Shadow=0"
+    # 3. ASS subtitle filter (bypasses FFmpeg's avformat_open_input SRT demuxer;
+    #    style is embedded in the ASS header — no force_style option needed)
     sub_abs_path = os.path.abspath(staged_sub).replace("\\", "/")
     sub_path_filter = sub_abs_path.replace(":", "\\:")
-    subtitles_filter = f"scale=trunc(iw/2)*2:trunc(ih/2)*2,subtitles='{sub_path_filter}':force_style='{force_style}'"
+    subtitles_filter = f"scale=trunc(iw/2)*2:trunc(ih/2)*2,ass='{sub_path_filter}'"
 
     # 4. Strict Bitrate & Audio Budgeting (guarantee final container strictly under 4200 MB)
     source_bitrate, duration = probe_video_properties(video_abs_path)
