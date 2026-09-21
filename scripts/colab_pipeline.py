@@ -688,14 +688,21 @@ def convert_srt_to_ass(srt_text: str) -> str:
 
     Resilient against:
       - Windows CRLF (\\r\\n) and old-Mac CR (\\r) line endings
-      - UTF-8 BOM (\\ufeff) at file start
+      - UTF-8 BOM (\\ufeff) and UTF-16 BOM (\\ufffe)
+      - Invisible Unicode directional marks (RLM, LRM, ALM) & zero-width controls
+      - Flexible timestamp arrows (--> , -> , —> , –>)
       - Timestamp separators: both comma (00:01:23,456) and period (00:01:23.456)
       - Variable-length millisecond fields (1-3 digits)
       - HTML formatting tags (<i>, <b>, <font>)
-      - Invisible Unicode joiners (ZWNJ, ZWJ, ZWNBSP, etc.)
+      - Fallback sequential line-by-line parser for broken block formatting
     """
-    # ── 0. Pre-clean: strip BOM, normalize ALL line endings to Unix LF ──
-    cleaned = srt_text.lstrip("\ufeff\ufffe").replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not srt_text:
+        return ""
+
+    # ── 0. Pre-clean: strip BOM, normalize newlines, purge invisible bidi & zero-width chars ──
+    cleaned = srt_text.lstrip("\ufeff\ufffe").replace("\r\n", "\n").replace("\r", "\n")
+    bidi_pattern = re.compile(r"[\u200e\u200f\u061c\u200b-\u200d\u202a-\u202e\u2066-\u2069\ufeff]")
+    cleaned = bidi_pattern.sub("", cleaned).strip()
     if not cleaned:
         return ""
 
@@ -717,9 +724,9 @@ def convert_srt_to_ass(srt_text: str) -> str:
     ]
     ass_header = '\n'.join(header_lines) + '\n'
 
-    # ── Flexible timestamp pattern (1-2 digit hours, comma OR period, 1-3 digit ms) ──
+    # ── Permissive timestamp pattern (arrows: -->, ->, —>, –>; separators: comma or period) ──
     time_pattern = re.compile(
-        r'(\d{1,2}:\d{2}:\d{2}[,.]\d{1,3})\s*-->\s*(\d{1,2}:\d{2}:\d{2}[,.]\d{1,3})'
+        r"(\d{1,2}:\d{2}:\d{2}[,\.]\d{1,3})\s*(?:-->|->|—>|–>)\s*(\d{1,2}:\d{2}:\d{2}[,\.]\d{1,3})"
     )
 
     def _srt_ts_to_ass(ts: str) -> str:
@@ -734,9 +741,9 @@ def convert_srt_to_ass(srt_text: str) -> str:
         return f"{h}:{mi:02d}:{s:02d}.{cs:02d}"
 
     def _clean_line(line: str) -> str:
-        """Strip HTML tags and invisible Unicode control characters from a subtitle line."""
+        """Strip HTML tags and residual control characters from a subtitle line."""
         c = re.sub(r'<[^>]+>', '', line.strip())
-        c = re.sub(r'[\u200b\u200c\u200d\u200e\u200f\ufeff\u00ad]', '', c)
+        c = bidi_pattern.sub('', c)
         return c
 
     # ── Primary parser: split by blank lines into blocks ──
@@ -748,22 +755,19 @@ def convert_srt_to_ass(srt_text: str) -> str:
         if len(lines) < 2:
             continue
 
-        tm = time_pattern.search(block)
-        if not tm:
+        tm = None
+        timing_idx = -1
+        for i, line in enumerate(lines):
+            tm = time_pattern.search(line)
+            if tm:
+                timing_idx = i
+                break
+
+        if not tm or timing_idx < 0:
             continue
 
         start_ass = _srt_ts_to_ass(tm.group(1))
         end_ass = _srt_ts_to_ass(tm.group(2))
-
-        # Find timing line index to extract text after it
-        timing_idx = -1
-        for i, line in enumerate(lines):
-            if '-->' in line:
-                timing_idx = i
-                break
-
-        if timing_idx < 0:
-            continue
 
         text_parts = [_clean_line(tl) for tl in lines[timing_idx + 1:] if _clean_line(tl)]
         if not text_parts:
@@ -772,18 +776,37 @@ def convert_srt_to_ass(srt_text: str) -> str:
         text = '\\N'.join(text_parts)
         dialogues.append(f"Dialogue: 0,{start_ass},{end_ass},Default,,0,0,0,,{text}")
 
-    # ── Fallback: if block parser found nothing, scan raw text with regex ──
+    # ── Fallback Sequential Parser: if block splitting yielded 0 entries ──
     if not dialogues:
-        for fm in time_pattern.finditer(cleaned):
-            start_ass = _srt_ts_to_ass(fm.group(1))
-            end_ass = _srt_ts_to_ass(fm.group(2))
-            after = cleaned[fm.end():]
-            text_block = re.split(r'\n\d+\s*\n|\n\s*\n', after, maxsplit=1)[0].strip()
-            if text_block:
-                parts = [_clean_line(l) for l in text_block.split('\n') if _clean_line(l)]
-                if parts:
-                    text = '\\N'.join(parts)
-                    dialogues.append(f"Dialogue: 0,{start_ass},{end_ass},Default,,0,0,0,,{text}")
+        lines = cleaned.split('\n')
+        current_start = None
+        current_end = None
+        current_text_parts = []
+
+        def _append_seq_dialogue():
+            if current_start and current_end and current_text_parts:
+                start_ass = _srt_ts_to_ass(current_start)
+                end_ass = _srt_ts_to_ass(current_end)
+                text = '\\N'.join(current_text_parts)
+                dialogues.append(f"Dialogue: 0,{start_ass},{end_ass},Default,,0,0,0,,{text}")
+
+        for line in lines:
+            line_str = line.strip()
+            if not line_str:
+                continue
+
+            tm = time_pattern.search(line_str)
+            if tm:
+                _append_seq_dialogue()
+                current_start = tm.group(1)
+                current_end = tm.group(2)
+                current_text_parts = []
+            elif current_start is not None:
+                cleaned_text = _clean_line(line_str)
+                if cleaned_text and not cleaned_text.isdigit():
+                    current_text_parts.append(cleaned_text)
+
+        _append_seq_dialogue()
 
     if not dialogues:
         return ""
