@@ -56,6 +56,7 @@ except Exception:
 WP_SITE_URL = os.getenv("WP_SITE_URL", "https://dev-movio-stream.pantheonsite.io").rstrip("/")
 WP_USERNAME = os.getenv("WP_USERNAME", "admin")
 WP_APP_PASSWORD = os.getenv("WP_APP_PASSWORD") or _COLAB_WP_PASS or ""
+NEXTJS_URL = os.getenv("NEXTJS_URL", "https://egymax.vercel.app").rstrip("/")
 
 TMDB_API_KEY = os.getenv("TMDB_API_KEY") or _COLAB_TMDB_KEY or ""
 DOODSTREAM_API_KEY = os.getenv("DOODSTREAM_API_KEY") or _COLAB_DOOD_KEY or ""
@@ -756,7 +757,9 @@ def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
 
     # 3. Robust subtitle filter configuration (executed with cwd=staging_dir)
     force_style = "Fontname=Noto Sans Arabic,Alignment=2,MarginV=25,FontSize=24,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=0,Shadow=0"
-    subtitles_filter = f"scale=trunc(iw/2)*2:trunc(ih/2)*2,subtitles='sub.srt':force_style='{force_style}'"
+    sub_abs_path = os.path.abspath(staged_sub).replace("\\", "/")
+    sub_path_filter = sub_abs_path.replace(":", "\\:")
+    subtitles_filter = f"scale=trunc(iw/2)*2:trunc(ih/2)*2,subtitles='{sub_path_filter}':force_style='{force_style}'"
 
     # 4. Strict Bitrate & Audio Budgeting (guarantee final container strictly under 4200 MB)
     source_bitrate, duration = probe_video_properties(video_abs_path)
@@ -797,7 +800,7 @@ def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
         "output_subbed.mp4"
     ]
 
-    proc = subprocess.run(cmd, cwd=staging_dir, capture_output=True, text=True)
+    proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=staging_dir)
     if proc.returncode != 0:
         err_snippet = proc.stderr[-300:] if proc.stderr else ""
         log("HARDSUB", f"NVENC hardsubbing error ({proc.returncode}): {err_snippet}. Attempting CPU fallback (libx264 faster / crf {cq_val})...")
@@ -815,7 +818,7 @@ def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
             "-c:a", "copy",
             "output_subbed.mp4"
         ]
-        proc_cpu = subprocess.run(cmd_cpu, cwd=staging_dir, capture_output=True, text=True)
+        proc_cpu = subprocess.run(cmd_cpu, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=staging_dir)
         if proc_cpu.returncode != 0:
             cpu_snippet = proc_cpu.stderr[-300:] if proc_cpu.stderr else ""
             log("HARDSUB", f"❌ CPU fallback failed ({proc_cpu.returncode}): {cpu_snippet}")
@@ -1209,7 +1212,7 @@ def run_pipeline(movie_title: str, release_year: str = None, imdb_id: str = None
     print(f"  Arabic Sub: {arabic_sub_status}")
     print(f"  Embed:      {embed_url}")
     print(f"  Live Post:  {post_data.get('link')}")
-    print(f"  Next.js:    http://localhost:3000/movie/{post_data.get('slug')}")
+    print(f"  Next.js:    {NEXTJS_URL}/movie/{post_data.get('slug')}")
     print("=" * 75)
     return post_data
 
