@@ -436,6 +436,36 @@ def download_with_aria2(torrent_source: str, download_dir: str = DOWNLOAD_DIR, s
     log("ARIA2", f"✅ Download verified intact: {os.path.basename(target_video)} ({file_size_mb:.2f} MB)")
     return target_video
 
+def read_subtitle_file_robustly(file_path: str) -> str:
+    """
+    Read subtitle file as binary bytes, strip UTF-8/UTF-16 BOMs and null bytes,
+    and decode testing encodings in strict priority order for Arabic characters (\u0600-\u06FF).
+    """
+    if not file_path or not os.path.exists(file_path):
+        return ""
+
+    with open(file_path, "rb") as f:
+        raw_bytes = f.read()
+
+    # Strip UTF-8 / UTF-16 BOMs and null bytes
+    raw_bytes = raw_bytes.replace(b"\x00", b"")
+
+    # Encodings to test in strict priority
+    encodings = ["utf-8-sig", "utf-8", "cp1256", "windows-1256", "iso-8859-6", "utf-16", "latin-1"]
+
+    for enc in encodings:
+        try:
+            decoded = raw_bytes.decode(enc)
+            # Check if Arabic characters exist in the decoded output
+            if any("\u0600" <= ch <= "\u06FF" for ch in decoded):
+                return decoded
+        except UnicodeDecodeError:
+            continue
+
+    # Fallback with ignore if no pure Arabic block matched
+    return raw_bytes.decode("cp1256", errors="replace")
+
+
 def decode_arabic_subtitle(raw_bytes: bytes) -> tuple:
     """
     Decodes raw subtitle bytes testing encodings strictly in priority order:
@@ -444,22 +474,23 @@ def decode_arabic_subtitle(raw_bytes: bytes) -> tuple:
     3. cp1256 (Windows Arabic)
     4. windows-1256
     5. iso-8859-6
-
-    (Does NOT test or fallback to latin1 before trying Arabic encodings).
-    Only accepts if decoded text contains Arabic Unicode characters (\\u0600-\\u06FF).
+    6. utf-16
+    7. latin-1
+    Only accepts if decoded text contains Arabic Unicode characters (\u0600-\u06FF).
     Returns (cleaned_text, detected_encoding) or (None, None).
     """
     if not raw_bytes:
         return None, None
 
-    encodings_to_try = ['utf-8-sig', 'utf-8', 'cp1256', 'windows-1256', 'iso-8859-6']
+    raw_bytes = raw_bytes.replace(b"\x00", b"")
+    encodings_to_try = ["utf-8-sig", "utf-8", "cp1256", "windows-1256", "iso-8859-6", "utf-16", "latin-1"]
 
     # Pass 1: Strict check (timing marker '-->' and Arabic Unicode characters)
     for enc in encodings_to_try:
         try:
             candidate = raw_bytes.decode(enc)
-            if '-->' in candidate and re.search(r'[\u0600-\u06FF]', candidate):
-                clean_text = candidate.lstrip('\ufeff').replace('\r\n', '\n').replace('\r', '\n')
+            if "-->" in candidate and any("\u0600" <= ch <= "\u06FF" for ch in candidate):
+                clean_text = candidate.lstrip("\ufeff").replace("\r\n", "\n").replace("\r", "\n")
                 return clean_text, enc
         except (UnicodeDecodeError, LookupError):
             continue
@@ -468,11 +499,16 @@ def decode_arabic_subtitle(raw_bytes: bytes) -> tuple:
     for enc in encodings_to_try:
         try:
             candidate = raw_bytes.decode(enc)
-            if re.search(r'[\u0600-\u06FF]', candidate):
-                clean_text = candidate.lstrip('\ufeff').replace('\r\n', '\n').replace('\r', '\n')
+            if any("\u0600" <= ch <= "\u06FF" for ch in candidate):
+                clean_text = candidate.lstrip("\ufeff").replace("\r\n", "\n").replace("\r", "\n")
                 return clean_text, enc
         except (UnicodeDecodeError, LookupError):
             continue
+
+    fallback = raw_bytes.decode("cp1256", errors="replace")
+    if any("\u0600" <= ch <= "\u06FF" for ch in fallback):
+        clean_text = fallback.lstrip("\ufeff").replace("\r\n", "\n").replace("\r", "\n")
+        return clean_text, "cp1256"
 
     return None, None
 
@@ -881,7 +917,7 @@ def convert_srt_to_ass(srt_text: str, srt_path: str = None) -> str:
             temp_ass = temp_src + ".ass"
             try:
                 subprocess.run(
-                    [ffmpeg_bin, "-y", "-i", temp_src, temp_ass],
+                    [ffmpeg_bin, "-y", "-sub_charenc", "UTF-8", "-i", temp_src, temp_ass],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                     check=False
@@ -926,20 +962,14 @@ def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
         log("HARDSUB", "ffmpeg not found in PATH; skipping hardsubbing and using raw video.")
         return video_path
 
-    # 1. Force UTF-8 conversion testing priority encodings: utf-8-sig, utf-8, cp1256, windows-1256, iso-8859-6
-    clean_sub_text = None
-    detected_encoding = None
+    # 1. Force UTF-8 conversion testing priority encodings: utf-8-sig, utf-8, cp1256, windows-1256, iso-8859-6, utf-16, latin-1
     try:
-        with open(srt_path, 'rb') as sf:
-            raw_bytes = sf.read()
-
-        clean_sub_text, detected_encoding = decode_arabic_subtitle(raw_bytes)
-
-        if not clean_sub_text:
+        clean_sub_text = read_subtitle_file_robustly(srt_path)
+        if not clean_sub_text or not any("\u0600" <= ch <= "\u06FF" for ch in clean_sub_text):
             log("HARDSUB", f"⚠️ Subtitle '{srt_path}' contains no Arabic Unicode characters across tested encodings; using original video.")
             return video_path
 
-        log("SUBS", f"ℹ️ Subtitle decoded using '{detected_encoding}' and re-encoded to UTF-8.")
+        log("SUBS", "ℹ️ Subtitle decoded robustly and verified to contain Arabic characters.")
     except Exception as e:
         log("HARDSUB", f"⚠️ Error validating subtitle encoding: {e}; falling back to raw video.")
         return video_path
@@ -960,12 +990,13 @@ def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
             except Exception:
                 pass
 
-    # Stage cleaned SRT file in case native FFmpeg conversion is needed
+    # Stage cleaned SRT file as strict UTF-8 for native FFmpeg conversion
     staged_clean_srt = os.path.join(staging_dir, "clean_sub.srt")
     try:
         with open(staged_clean_srt, 'w', encoding='utf-8', newline='\n') as csf:
             csf.write(clean_sub_text)
-    except Exception:
+    except Exception as e:
+        log("HARDSUB", f"⚠️ Could not write {staged_clean_srt}: {e}")
         staged_clean_srt = srt_path
 
     # Convert SRT → ASS format (bypasses FFmpeg SRT demuxer 'Unable to open' errors)
@@ -975,7 +1006,11 @@ def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
     if not ass_content or 'Dialogue:' not in ass_content:
         log("HARDSUB", "⚠️ Python parser yielded 0 dialogues; invoking native FFmpeg CLI conversion engine...")
         try:
-            subprocess.run(["ffmpeg", "-y", "-i", staged_clean_srt, staged_sub], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(
+                ["ffmpeg", "-y", "-sub_charenc", "UTF-8", "-i", staged_clean_srt, staged_sub],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
+            )
             if os.path.exists(staged_sub) and os.path.getsize(staged_sub) > 0:
                 with open(staged_sub, "r", encoding="utf-8", errors="replace") as af:
                     ass_content = apply_ass_style(af.read())
