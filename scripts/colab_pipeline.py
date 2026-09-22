@@ -45,10 +45,14 @@ try:
     _COLAB_WP_PASS = userdata.get('WP_APP_PASSWORD')
     _COLAB_TMDB_KEY = userdata.get('TMDB_API_KEY')
     _COLAB_DOOD_KEY = userdata.get('DOODSTREAM_API_KEY')
+    _COLAB_STREAMTAPE_LOGIN = userdata.get('STREAMTAPE_LOGIN')
+    _COLAB_STREAMTAPE_KEY = userdata.get('STREAMTAPE_KEY')
 except Exception:
     _COLAB_WP_PASS = None
     _COLAB_TMDB_KEY = None
     _COLAB_DOOD_KEY = None
+    _COLAB_STREAMTAPE_LOGIN = None
+    _COLAB_STREAMTAPE_KEY = None
 
 # =============================================================================
 # ENVIRONMENT & CREDENTIALS CONFIGURATION
@@ -61,6 +65,10 @@ NEXTJS_URL = os.getenv("NEXTJS_URL", "https://egymax.vercel.app").rstrip("/")
 TMDB_API_KEY = os.getenv("TMDB_API_KEY") or _COLAB_TMDB_KEY or ""
 DOODSTREAM_API_KEY = os.getenv("DOODSTREAM_API_KEY") or _COLAB_DOOD_KEY or ""
 DOODSTREAM_API_BASE = "https://doodapi.com/api"
+
+STREAMTAPE_LOGIN = os.getenv("STREAMTAPE_LOGIN") or _COLAB_STREAMTAPE_LOGIN or "06340d1c727a30bcd350"
+STREAMTAPE_KEY = os.getenv("STREAMTAPE_KEY") or _COLAB_STREAMTAPE_KEY or "BbWjjoderVTyxx2"
+STREAMTAPE_API_BASE = "https://api.streamtape.com"
 
 DOWNLOAD_DIR = "/content/download" if os.path.exists("/content") else os.path.abspath("./downloads")
 STAGING_DIR = "/content/staging" if os.path.exists("/content") else os.path.abspath("./staging_temp")
@@ -1258,6 +1266,145 @@ def upload_to_doodstream(video_path: str, api_key: str = DOODSTREAM_API_KEY, max
 
     raise RuntimeError(f"DoodStream upload failed after {max_retries} attempts. Last error: {last_error}")
 
+def upload_to_streamtape(video_path: str, login: str = STREAMTAPE_LOGIN, key: str = STREAMTAPE_KEY, max_retries: int = 3) -> str:
+    """
+    Upload local video file to Streamtape API.
+    1. Obtains upload server URL from https://api.streamtape.com/file/ul?login={login}&key={key}
+    2. Uploads video via multipart form.
+    3. Returns clean embed URL: https://streamtape.com/e/{file_id}
+    """
+    if not login or not key:
+        raise ValueError("STREAMTAPE_LOGIN or STREAMTAPE_KEY is not configured.")
+
+    filename = os.path.basename(video_path)
+    file_size_bytes = os.path.getsize(video_path)
+    file_size_mb = file_size_bytes / (1024 * 1024)
+
+    last_error = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            log("STREAMTAPE", f"Requesting Streamtape upload server (Attempt {attempt}/{max_retries})...")
+            srv_resp = requests.get(
+                f"{STREAMTAPE_API_BASE}/file/ul",
+                params={"login": login, "key": key},
+                timeout=30
+            ).json()
+
+            if srv_resp.get("status") != 200 or not srv_resp.get("result", {}).get("url"):
+                raise RuntimeError(f"Failed to obtain Streamtape upload server: {srv_resp}")
+
+            upload_url = srv_resp["result"]["url"]
+            log("STREAMTAPE", f"Assigned server: {upload_url[:50]}... Uploading '{filename}' ({file_size_mb:.1f} MB)...")
+
+            if HAS_TOOLBELT:
+                with open(video_path, 'rb') as f:
+                    encoder = MultipartEncoder(fields={'file': (filename, f, 'video/mp4')})
+                    last_pct = [-1]
+                    def progress(monitor):
+                        pct = int((monitor.bytes_read / monitor.len) * 100)
+                        if pct % 10 == 0 and pct != last_pct[0]:
+                            last_pct[0] = pct
+                            print(f"  [Streamtape Progress] {pct}% ({monitor.bytes_read / (1024*1024):.1f} MB / {monitor.len / (1024*1024):.1f} MB)", flush=True)
+                    monitor = MultipartEncoderMonitor(encoder, progress)
+                    resp = requests.post(
+                        upload_url,
+                        data=monitor,
+                        headers={'Content-Type': monitor.content_type},
+                        timeout=7200
+                    ).json()
+            else:
+                with open(video_path, 'rb') as f:
+                    resp = requests.post(
+                        upload_url,
+                        files={'file': (filename, f, 'video/mp4')},
+                        timeout=7200
+                    ).json()
+
+            if resp.get("status") != 200:
+                raise RuntimeError(f"Streamtape upload rejected: {resp}")
+
+            result = resp.get("result", {})
+            file_id = result.get("id")
+            if not file_id:
+                stream_url = result.get("url", "")
+                m = re.search(r'/v/([^/]+)', stream_url)
+                if m:
+                    file_id = m.group(1)
+
+            if not file_id:
+                raise RuntimeError(f"Could not parse Streamtape file ID from response: {resp}")
+
+            embed_url = f"https://streamtape.com/e/{file_id}"
+            log("STREAMTAPE", f"Upload successful! File ID: {file_id} -> {embed_url}")
+            return embed_url
+
+        except Exception as e:
+            last_error = e
+            log("STREAMTAPE", f"Upload attempt {attempt} encountered error: {e.__class__.__name__}: {e}")
+            if attempt < max_retries:
+                wait_time = attempt * 5
+                log("STREAMTAPE", f"Waiting {wait_time}s before retrying...")
+                time.sleep(wait_time)
+
+    raise RuntimeError(f"Streamtape upload failed after {max_retries} attempts. Last error: {last_error}")
+
+def upload_by_quality(video_path: str, quality: str = "1080p") -> dict:
+    """
+    Quality Distribution Logic:
+    - 1080p Quality: Automatically uploaded to Doodstream.
+    - 720p Quality:  Automatically uploaded to Streamtape.
+    Returns: {"primary_embed": str, "dood_embed": str, "streamtape_embed": str, "quality": str}
+    """
+    q_norm = quality.lower().strip()
+    dood_url = None
+    streamtape_url = None
+
+    if "720" in q_norm:
+        log("UPLOAD", "Quality is 720p -> Routing upload to Streamtape (Server 2)...")
+        streamtape_url = upload_to_streamtape(video_path)
+        primary = streamtape_url
+    else:
+        log("UPLOAD", f"Quality is {quality} (1080p FHD) -> Routing upload to Doodstream (Server 1)...")
+        dood_url = upload_to_doodstream(video_path)
+        primary = dood_url
+
+    return {
+        "primary_embed": primary,
+        "dood_embed": dood_url,
+        "streamtape_embed": streamtape_url,
+        "quality": quality,
+    }
+
+def upload_to_multi_servers(video_path: str, quality: str = "1080p") -> dict:
+    """
+    Upload to both Doodstream (Server 1) and Streamtape (Server 2)
+    to enable full multi-server switching in the player.
+    """
+    dood_url = None
+    streamtape_url = None
+
+    try:
+        log("UPLOAD", "Uploading to Server 1 (Doodstream)...")
+        dood_url = upload_to_doodstream(video_path)
+    except Exception as e:
+        log("UPLOAD", f"⚠️ Doodstream upload error: {e}")
+
+    try:
+        log("UPLOAD", "Uploading to Server 2 (Streamtape)...")
+        streamtape_url = upload_to_streamtape(video_path)
+    except Exception as e:
+        log("UPLOAD", f"⚠️ Streamtape upload error: {e}")
+
+    if not dood_url and not streamtape_url:
+        raise RuntimeError("Failed to upload to both Doodstream and Streamtape.")
+
+    return {
+        "primary_embed": dood_url or streamtape_url,
+        "dood_embed": dood_url,
+        "streamtape_embed": streamtape_url,
+        "quality": quality,
+    }
+
 # =============================================================================
 # 5. HEADLESS WORDPRESS PUBLISHING (PANTHEON REST API) & CATEGORIZATION
 # =============================================================================
@@ -1403,10 +1550,19 @@ def upload_poster_to_pantheon(image_url: str, title_slug: str, wp_site_url: str 
         log("WP", f"Poster upload notice ({res.status_code}): {res.text[:150]}")
         return None
 
-def publish_movie_to_pantheon(meta: dict, embed_url: str, quality: str = "1080p", wp_site_url: str = WP_SITE_URL, username: str = WP_USERNAME, app_password: str = WP_APP_PASSWORD) -> dict:
+def publish_movie_to_pantheon(
+    meta: dict,
+    embed_url: str,
+    quality: str = "1080p",
+    dood_embed: str = None,
+    streamtape_embed: str = None,
+    wp_site_url: str = WP_SITE_URL,
+    username: str = WP_USERNAME,
+    app_password: str = WP_APP_PASSWORD
+) -> dict:
     """
     Publish movie post with 16:9 responsive embed player, linked category IDs, and full metadata
-    into Pantheon Headless WordPress CMS.
+    into Pantheon Headless WordPress CMS. Supports both Doodstream and Streamtape servers.
     """
     clean_slug = re.sub(r'[^a-zA-Z0-9]+', '-', meta['title'].lower()).strip('-')
     media_id = upload_poster_to_pantheon(meta.get("poster_url"), clean_slug, wp_site_url, username, app_password)
@@ -1423,10 +1579,14 @@ def publish_movie_to_pantheon(meta: dict, embed_url: str, quality: str = "1080p"
     if not imdb_rating:
         imdb_rating = "7.5"
 
+    dood_clean = dood_embed or (embed_url if "dood" in str(embed_url).lower() else "")
+    streamtape_clean = streamtape_embed or (embed_url if "streamtape" in str(embed_url).lower() else "")
+
     content = f"""
 <div class="video-container" style="position: relative; padding-bottom: 56.25%; height: 0; overflow: hidden; max-width: 100%; border-radius: 12px; margin-bottom: 1.5rem;">
     <iframe src="{embed_url}" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: 0;" allowfullscreen="true" scrolling="no" frameborder="0"></iframe>
 </div>
+<!-- SERVERS: dood={dood_clean} streamtape={streamtape_clean} -->
 
 <p>★ <strong>Rating:</strong> {imdb_rating} / 10 | <strong>Release Year:</strong> {meta.get('year', '2026')} | <strong>Quality:</strong> {quality}</p>
 
@@ -1452,7 +1612,10 @@ def publish_movie_to_pantheon(meta: dict, embed_url: str, quality: str = "1080p"
         "vote_average": imdb_rating,
         "_imdb_rating": imdb_rating,
         "embed_url": embed_url,
-        "dood_embed": embed_url,
+        "dood_embed": dood_clean,
+        "streamtape_embed": streamtape_clean,
+        "embed_url_1080p": dood_clean or (embed_url if "1080" in quality else ""),
+        "embed_url_720p": streamtape_clean or (embed_url if "720" in quality else ""),
         "video_year": str(meta.get("year", "2026")),
         "quality": quality,
         "backdrop_url": meta.get("backdrop_url") or "",
@@ -1562,13 +1725,31 @@ def run_pipeline(movie_title: str, release_year: str = None, imdb_id: str = None
             log("PIPELINE", f"Renamed upload file for DoodStream: {final_filename}")
         burned_video_path = final_filepath
 
-    # 6. Upload burned video to DoodStream with Retry & Server Re-allocation
+    # 6. Quality Distribution & Multi-Server Upload
+    # 1080p Quality -> Automatically uploaded to Doodstream (Server 1)
+    # 720p Quality  -> Automatically uploaded to Streamtape (Server 2)
+    # Supports 'both' / 'multi' to upload to both platforms for dual-server playback
     if not verify_video_integrity(burned_video_path):
         raise RuntimeError(f"Downloaded file is corrupted or incomplete; aborting upload. ({burned_video_path})")
-    embed_url = upload_to_doodstream(burned_video_path)
+
+    active_quality = torrent_info.get("quality", preferred_quality)
+    if preferred_quality in ("both", "multi", "all"):
+        upload_res = upload_to_multi_servers(burned_video_path, active_quality)
+    else:
+        upload_res = upload_by_quality(burned_video_path, active_quality)
+
+    primary_embed = upload_res["primary_embed"]
+    dood_url = upload_res.get("dood_embed")
+    streamtape_url = upload_res.get("streamtape_embed")
 
     # 7. Publish directly to Pantheon WordPress (clean embed URL inside double-quoted iframe)
-    post_data = publish_movie_to_pantheon(meta, embed_url, torrent_info["quality"])
+    post_data = publish_movie_to_pantheon(
+        meta,
+        primary_embed,
+        active_quality,
+        dood_embed=dood_url,
+        streamtape_embed=streamtape_url
+    )
 
     # 8. Cleanup temporary files: original .mp4, .srt, and the generated *_subbed.mp4
     cleanup_targets = set([raw_video_path, burned_video_path, arabic_srt_path])
@@ -1584,18 +1765,108 @@ def run_pipeline(movie_title: str, release_year: str = None, imdb_id: str = None
     print("  PIPELINE COMPLETED SUCCESSFULLY!")
     print(f"  Title:      {meta['title']} ({meta['year']})")
     print(f"  Rating:     ★ {meta.get('imdb_rating') or meta.get('rating')}")
+    print(f"  Quality:    {active_quality}")
     print(f"  Arabic Sub: {arabic_sub_status}")
-    print(f"  Embed:      {embed_url}")
+    print(f"  Server 1:   {dood_url or 'N/A'} (DoodStream)")
+    print(f"  Server 2:   {streamtape_url or 'N/A'} (Streamtape)")
+    print(f"  Primary:    {primary_embed}")
     print(f"  Live Post:  {post_data.get('link')}")
     print(f"  Next.js:    {NEXTJS_URL}/movie/{post_data.get('slug')}")
     print("=" * 75)
     return post_data
 
+# =============================================================================
+# BATCH / BULK PROCESSING ENGINE
+# =============================================================================
+def run_batch_pipeline(items: list, preferred_quality: str = "1080p") -> list:
+    """
+    Process, download, and upload a list/array of movie titles, episode names, or links sequentially.
+    Handles errors per item gracefully so one failure does not break the entire batch.
+    """
+    if not items:
+        log("BATCH", "⚠️ No items provided for batch processing.")
+        return []
+
+    print("\n" + "=" * 75)
+    print(f"  EGYMAX BATCH ENGINE: Processing {len(items)} Items Sequentially")
+    print(f"  Quality Mode: {preferred_quality}")
+    print("=" * 75 + "\n")
+
+    results = []
+    for idx, item in enumerate(items, 1):
+        print("\n" + "-" * 75)
+        print(f"  [BATCH {idx}/{len(items)}] Processing: {item}")
+        print("-" * 75)
+
+        title = None
+        year = None
+        imdb_id = None
+        q = preferred_quality
+
+        if isinstance(item, str):
+            clean_item = item.strip()
+            if not clean_item:
+                continue
+            if clean_item.startswith("tt") and len(clean_item) >= 9:
+                imdb_id = clean_item
+                title = clean_item
+            else:
+                m_year = re.search(r'\((\d{4})\)', clean_item)
+                if m_year:
+                    year = m_year.group(1)
+                    title = clean_item.replace(f"({year})", "").strip()
+                else:
+                    title = clean_item
+        elif isinstance(item, dict):
+            title = item.get("title")
+            year = item.get("year")
+            imdb_id = item.get("imdb_id") or item.get("imdb")
+            q = item.get("quality", preferred_quality)
+
+        try:
+            post_result = run_pipeline(title, year, imdb_id, q)
+            results.append({"status": "SUCCESS", "item": item, "post": post_result})
+            log("BATCH", f"✅ Completed item [{idx}/{len(items)}]: {title}")
+        except Exception as e:
+            log("BATCH", f"❌ Failed item [{idx}/{len(items)}] '{item}': {e}")
+            results.append({"status": "FAILED", "item": item, "error": str(e)})
+
+    # Final summary report
+    print("\n" + "=" * 75)
+    print(f"  BATCH PROCESSING SUMMARY ({len(results)} Total Items)")
+    print("=" * 75)
+    for i, res in enumerate(results, 1):
+        status_icon = "✅" if res["status"] == "SUCCESS" else "❌"
+        item_name = res["item"] if isinstance(res["item"], str) else res["item"].get("title")
+        detail = res.get("post", {}).get("link") if res["status"] == "SUCCESS" else res.get("error", "Failed")
+        print(f"  {status_icon} [{i}/{len(results)}] {item_name} -> {detail}")
+    print("=" * 75 + "\n")
+    return results
+
 if __name__ == "__main__":
     if len(sys.argv) > 1:
-        t = sys.argv[1]
-        y = sys.argv[2] if len(sys.argv) > 2 else None
-        imdb = sys.argv[3] if len(sys.argv) > 3 else None
-        run_pipeline(t, y, imdb)
+        first_arg = sys.argv[1]
+        if first_arg in ("--batch", "-b", "--batch-file", "-f"):
+            if len(sys.argv) > 2:
+                batch_target = sys.argv[2]
+                quality = sys.argv[3] if len(sys.argv) > 3 else "1080p"
+                if os.path.exists(batch_target):
+                    with open(batch_target, "r", encoding="utf-8") as f:
+                        lines = [line.strip() for line in f if line.strip() and not line.startswith("#")]
+                    run_batch_pipeline(lines, preferred_quality=quality)
+                else:
+                    # Comma-separated list of titles: "Matrix, Interstellar, Inception"
+                    items = [t.strip() for t in batch_target.split(",") if t.strip()]
+                    run_batch_pipeline(items, preferred_quality=quality)
+            else:
+                print("Usage: python colab_pipeline.py --batch <file_path_or_comma_separated_titles> [quality]")
+        else:
+            t = sys.argv[1]
+            y = sys.argv[2] if len(sys.argv) > 2 else None
+            imdb = sys.argv[3] if len(sys.argv) > 3 else None
+            q = sys.argv[4] if len(sys.argv) > 4 else "1080p"
+            run_pipeline(t, y, imdb, preferred_quality=q)
     else:
-        print("Usage: python colab_pipeline.py <Movie Title> [Release Year] [IMDb ID]")
+        print("Usage:")
+        print("  Single item: python colab_pipeline.py <Movie Title> [Release Year] [IMDb ID] [Quality]")
+        print("  Batch mode:  python colab_pipeline.py --batch <file_path_or_comma_separated_titles> [Quality]")

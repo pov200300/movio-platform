@@ -74,16 +74,22 @@ export default function Navbar() {
               الرئيسية
             </Link>
             <Link 
+              href="/movies?category=foreign" 
+              className={styles.navLink}
+            >
+              أفلام أجنبي
+            </Link>
+            <Link 
               href="/movies?category=arabic" 
               className={styles.navLink}
             >
               أفلام عربي
             </Link>
             <Link 
-              href="/movies?category=foreign" 
-              className={styles.navLink}
+              href="/series" 
+              className={`${styles.navLink} ${pathname.startsWith('/series') ? styles.navLinkActive : ''}`}
             >
-              أفلام أجنبي
+              المسلسلات
             </Link>
             <Link 
               href="/movies?sort=views" 
@@ -120,13 +126,18 @@ export default function Navbar() {
               </Link>
             </li>
             <li>
-              <Link href="/movies?category=arabic">
-                🎭 أفلام عربي
+              <Link href="/series" className={pathname.startsWith('/series') ? styles.mobileActive : ''}>
+                📺 المسلسلات
               </Link>
             </li>
             <li>
               <Link href="/movies?category=foreign">
                 🎬 أفلام أجنبي
+              </Link>
+            </li>
+            <li>
+              <Link href="/movies?category=arabic">
+                🎭 أفلام عربي
               </Link>
             </li>
             <li>

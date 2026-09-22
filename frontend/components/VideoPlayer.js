@@ -7,14 +7,16 @@ import styles from './VideoPlayer.module.css';
 export default function VideoPlayer({
   slug,
   embedUrl,
+  doodEmbed,
+  streamtapeEmbed,
   directStreamUrl,
   embedHtml,
   posterUrl,
   title,
 }) {
   const [isPlaying, setIsPlaying] = useState(false);
-  // Default on load: Server 1 (Embed / Fast Mirror) for immediate video loading
-  const [activeServer, setActiveServer] = useState(1); // 1 = Server 1, 2 = Server 2, 3 = EGYMAX VIP
+  // Default on load: Server 1 (Doodstream 1080p FHD) for immediate high quality loading
+  const [activeServer, setActiveServer] = useState(1); // 1 = Doodstream (1080p), 2 = Streamtape (720p), 3 = EGYMAX VIP
   const [streamUrl, setStreamUrl] = useState(directStreamUrl || null);
   const [isResolving, setIsResolving] = useState(false);
   const [streamFailed, setStreamFailed] = useState(false);
@@ -27,13 +29,22 @@ export default function VideoPlayer({
     if (match) rawUrl = match[1];
   }
 
-  // Generate live mirror servers
-  let server1Url = rawUrl;
-  let server2Url = null;
+  // Generate verified server URLs
+  // Server 1: 1080p FHD via Doodstream
+  let server1Url = doodEmbed || rawUrl;
+  if (server1Url) {
+    server1Url = server1Url.replace('dood.to', 'doodstream.com').replace('dood.so', 'doodstream.com');
+  }
 
-  if (rawUrl) {
-    server1Url = rawUrl.replace('dood.to', 'doodstream.com').replace('dood.so', 'doodstream.com');
-    server2Url = rawUrl.replace('doodstream.com', 'dood.so').replace('dood.to', 'dood.so');
+  // Server 2: 720p HD via Streamtape (or mirror)
+  let server2Url = streamtapeEmbed;
+  if (!server2Url && rawUrl) {
+    if (rawUrl.includes('streamtape') || rawUrl.includes('tapecontent')) {
+      server2Url = rawUrl;
+    } else if (rawUrl.includes('dood')) {
+      // Fallback mirror if streamtape embed is not yet populated
+      server2Url = rawUrl.replace('doodstream.com', 'dood.so').replace('dood.to', 'dood.so');
+    }
   }
 
   // Function to resolve direct stream link for EGYMAX VIP player
@@ -69,11 +80,10 @@ export default function VideoPlayer({
       setIsResolving(false);
     }
 
-    // Mark as failed if unresolvable, but keep user on EGYMAX tab without bouncing
     setStreamFailed(true);
   }, [slug, embedUrl, directStreamUrl]);
 
-  // Attempt stream resolution when user activates EGYMAX server (Server 3)
+  // Attempt stream resolution when user activates EGYMAX VIP server (Server 3)
   useEffect(() => {
     if (activeServer === 3 && !streamUrl && !streamFailed && isPlaying) {
       resolveStream();
@@ -136,17 +146,17 @@ export default function VideoPlayer({
 
             <div className={styles.overlayInfo}>
               <span className={styles.streamBadge}>
-                {activeServer === 3 ? 'EGYMAX VIP Cinema Player' : `Server ${activeServer} • FHD 1080p`}
+                {activeServer === 1 ? 'سيرفر 1 • FHD 1080p' : activeServer === 2 ? 'سيرفر 2 • HD 720p' : 'EGYMAX VIP Cinema Player'}
               </span>
               <p className={styles.playText}>انقر هنا لبدء المشاهدة</p>
             </div>
           </div>
         ) : activeServer === 1 && server1Url ? (
-          /* Server 1 (Default): Fast DoodStream Embed */
+          /* Server 1 (Default): DoodStream 1080p FHD */
           <div className={styles.iframeWrapper}>
             <iframe 
               src={server1Url} 
-              title={title || 'EGYMAX Server 1'}
+              title={title ? `${title} - سيرفر 1 (1080p FHD)` : 'سيرفر 1 - 1080p FHD'}
               width="100%" 
               height="100%" 
               frameBorder="0" 
@@ -156,11 +166,11 @@ export default function VideoPlayer({
             />
           </div>
         ) : activeServer === 2 && (server2Url || server1Url) ? (
-          /* Server 2: CDN / Backup Embed */
+          /* Server 2: Streamtape 720p HD */
           <div className={styles.iframeWrapper}>
             <iframe 
               src={server2Url || server1Url} 
-              title={title || 'EGYMAX Server 2'}
+              title={title ? `${title} - سيرفر 2 (720p HD)` : 'سيرفر 2 - 720p HD'}
               width="100%" 
               height="100%" 
               frameBorder="0" 
@@ -189,17 +199,20 @@ export default function VideoPlayer({
           ) : (
             <div className={styles.directStreamNoticeBox}>
               <span className={styles.noticeStatusIcon}>📡</span>
-              <h3>سيرفر EGYMAX قيد التجهيز</h3>
+              <h3>سيرفر EGYMAX VIP قيد التجهيز</h3>
               <p>
-                لم يتم ربط البث المباشر لهذا الفيلم بعد على مشغل EGYMAX.
-                يمكنك إعادة المحاولة أو الانتقال فوراً إلى Server 1 للمشاهدة.
+                لم يتم ربط البث المباشر لهذا المحتوى بعد على مشغل EGYMAX VIP.
+                يمكنك التبديل فوراً إلى سيرفر 1 (1080p) أو سيرفر 2 (720p) للمشاهدة دون انقطاع.
               </p>
               <div className={styles.noticeActionButtons}>
                 <button type="button" onClick={handleRetry} className={styles.retryBtn}>
-                  🔄 Retry EGYMAX
+                  🔄 إعادة محاولة VIP
                 </button>
                 <button type="button" onClick={() => handleServerChange(1)} className={styles.switchMirrorBtn}>
-                  ⚡ Switch to Server 1
+                  ⚡ الانتقال لسيرفر 1 (1080p)
+                </button>
+                <button type="button" onClick={() => handleServerChange(2)} className={styles.switchMirrorBtn}>
+                  🎬 الانتقال لسيرفر 2 (720p)
                 </button>
               </div>
             </div>
@@ -225,43 +238,51 @@ export default function VideoPlayer({
         <div className={styles.serverHeader}>
           <div className={styles.serverTitleGroup}>
             <span className={styles.serverTitle}>اختر سيرفر المشاهدة:</span>
+            {activeServer === 1 && <span className={styles.serverQualityTag}>1080p FHD</span>}
+            {activeServer === 2 && <span className={styles.serverQualityTag}>720p HD</span>}
             {activeServer === 3 && streamUrl && !streamFailed && (
               <span className={styles.vipTag}>VIP Ultra HD</span>
             )}
           </div>
-          <span className={styles.serverHint}>يمكنك التبديل بين السيرفرات بحرية في أي وقت</span>
+          <span className={styles.serverHint}>يمكنك التبديل بين السيرفرات بحرية وبدون إعادة تحميل الصفحة</span>
         </div>
 
-        {/* English-Only Button Labels */}
+        {/* Multi-Server Buttons with Quality Badges */}
         <div className={styles.serverTabs}>
-          {/* First Tab (Default Active): Server 1 */}
+          {/* Server 1 Tab: Doodstream 1080p */}
           <button 
             type="button"
             onClick={() => handleServerChange(1)} 
             className={`${styles.serverTab} ${activeServer === 1 ? styles.activeTab : ''}`}
+            title="سيرفر 1: جودة فائقة 1080p Full HD عبر Doodstream"
           >
             <span className={styles.tabIcon}>⚡</span>
-            <span>Server 1</span>
+            <span>سيرفر 1 (Doodstream)</span>
+            <span className={`${styles.tabBadge} ${styles.tabBadgeFhd}`}>1080p FHD</span>
           </button>
           
-          {/* Second Tab: Server 2 */}
+          {/* Server 2 Tab: Streamtape 720p */}
           <button 
             type="button"
             onClick={() => handleServerChange(2)} 
             className={`${styles.serverTab} ${activeServer === 2 ? styles.activeTab : ''}`}
+            title="سيرفر 2: جودة عالية 720p HD عبر Streamtape"
           >
-            <span className={styles.tabIcon}>💾</span>
-            <span>Server 2</span>
+            <span className={styles.tabIcon}>🎬</span>
+            <span>سيرفر 2 (Streamtape)</span>
+            <span className={`${styles.tabBadge} ${styles.tabBadgeHd}`}>720p HD</span>
           </button>
           
-          {/* Third Tab (Last in list): EGYMAX VIP */}
+          {/* Server 3 Tab: EGYMAX VIP */}
           <button 
             type="button"
             onClick={() => handleServerChange(3)} 
             className={`${styles.serverTab} ${activeServer === 3 ? styles.activeTab : ''}`}
+            title="سيرفر VIP: مشغل سينمائي مباشر بدون إعلانات مزعجة"
           >
             <span className={styles.tabIcon}>🔴</span>
-            <span>EGYMAX</span>
+            <span>EGYMAX VIP</span>
+            <span className={`${styles.tabBadge} ${styles.tabBadgeVip}`}>VIP Direct</span>
             {isResolving && <span className={styles.tabLoading}>⏳</span>}
           </button>
         </div>

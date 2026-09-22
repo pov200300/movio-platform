@@ -56,6 +56,12 @@ export default async function sitemap() {
       priority: 0.9,
     },
     {
+      url: `${BASE_URL}/series`,
+      lastModified: now,
+      changeFrequency: 'daily',
+      priority: 0.9,
+    },
+    {
       url: `${BASE_URL}/categories`,
       lastModified: now,
       changeFrequency: 'weekly',
@@ -99,6 +105,22 @@ export default async function sitemap() {
     console.error('[SITEMAP] Warning: Failed to fetch categories from WordPress:', err.message);
   }
 
-  // 4. Return combined sitemap entries (static fallback always preserved)
-  return [...staticRoutes, ...categoryRoutes, ...movieRoutes];
+  // 4. Dynamic TV Series Routes
+  const seriesSlugs = [
+    'breaking-bad',
+    'game-of-thrones',
+    'house-of-the-dragon',
+    'stranger-things',
+    'chernobyl',
+    'loki',
+  ];
+  const seriesRoutes = seriesSlugs.map((slug) => ({
+    url: `${BASE_URL}/series/${slug}`,
+    lastModified: now,
+    changeFrequency: 'weekly',
+    priority: 0.85,
+  }));
+
+  // 5. Return combined sitemap entries (static fallback always preserved)
+  return [...staticRoutes, ...categoryRoutes, ...movieRoutes, ...seriesRoutes];
 }

@@ -285,6 +285,8 @@ export default async function MoviePage({ params }) {
           <VideoPlayer 
             slug={params.slug}
             embedUrl={movie.embedUrl}
+            doodEmbed={movie.doodEmbed}
+            streamtapeEmbed={movie.streamtapeEmbed}
             directStreamUrl={movie.directStreamUrl}
             posterUrl={movie.posterUrl} 
             title={movie.rawTitle} 
