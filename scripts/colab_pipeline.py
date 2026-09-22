@@ -1046,8 +1046,7 @@ def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
             except Exception:
                 pass
 
-    # Stage cleaned SRT file as strict UTF-8 for native FFmpeg conversion
-    staged_clean_srt = os.path.join(staging_dir, "clean_sub.srt")
+    staged_clean_srt = os.path.join(staging_dir, "sub.srt")
     try:
         with open(staged_clean_srt, 'w', encoding='utf-8', newline='\n') as csf:
             csf.write(clean_sub_text)
@@ -1055,139 +1054,79 @@ def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
         log("HARDSUB", f"⚠️ Could not write {staged_clean_srt}: {e}")
         staged_clean_srt = srt_path
 
-    # Convert SRT → ASS format (bypasses FFmpeg SRT demuxer 'Unable to open' errors)
-    ass_content = convert_srt_to_ass(clean_sub_text, staged_clean_srt)
-
-    # If Python parser and internal fallback yielded 0 dialogues, run native FFmpeg CLI directly
-    if not ass_content or 'Dialogue:' not in ass_content:
-        log("HARDSUB", "⚠️ Python parser yielded 0 dialogues; invoking native FFmpeg CLI conversion engine...")
-        try:
-            subprocess.run(
-                ["ffmpeg", "-y", "-sub_charenc", "UTF-8", "-i", staged_clean_srt, staged_sub],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL
-            )
-            if os.path.exists(staged_sub) and os.path.getsize(staged_sub) > 0:
-                with open(staged_sub, "r", encoding="utf-8", errors="replace") as af:
-                    ass_content = apply_ass_style(af.read())
-                with open(staged_sub, "w", encoding="utf-8", newline="\n") as out_sf:
-                    out_sf.write(ass_content)
-                log("HARDSUB", f"✅ Native FFmpeg subtitle conversion succeeded: {staged_sub}")
-        except Exception as e:
-            log("HARDSUB", f"⚠️ Native FFmpeg conversion error: {e}")
-
-    if not ass_content or 'Dialogue:' not in ass_content:
-        log("HARDSUB", "⚠️ SRT→ASS conversion produced no valid subtitle entries; using original video.")
-        return video_path
-
-    # Stage the ASS subtitle file inside staging_dir (if not already written)
-    try:
-        with open(staged_sub, 'w', encoding='utf-8', newline='\n') as out_sf:
-            out_sf.write(ass_content)
-        log("HARDSUB", f"Staged subtitle (SRT→ASS converted, {len(ass_content)} bytes): {staged_sub}")
-    except Exception as e:
-        log("HARDSUB", f"⚠️ Could not write {staged_sub}: {e}")
-        return video_path
-
     # Stage input video via symlink (instant & zero disk overhead on Linux/Colab)
     video_abs_path = os.path.abspath(video_path)
     ffmpeg_input = "input_video.mp4"
     try:
+        if os.path.exists(staged_input) or os.path.islink(staged_input):
+            os.remove(staged_input)
         os.symlink(video_abs_path, staged_input)
         log("HARDSUB", f"Staged video symlinked: {staged_input} -> {video_abs_path}")
     except Exception as e:
         log("HARDSUB", f"Symlink notice: {e}; referencing input path directly.")
         ffmpeg_input = video_abs_path
 
-    # 3. ASS subtitle filter with dimension and pixel format stabilization
-    sub_abs_path = os.path.abspath(staged_sub).replace("\\", "/")
-    sub_path_filter = sub_abs_path.replace(":", "\\:")
-    subtitles_filter = f"scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p,ass='{sub_path_filter}'"
+    staged_output = os.path.join(staging_dir, "output_1080p.mp4")
+    if os.path.exists(staged_output):
+        try: os.remove(staged_output)
+        except Exception: pass
 
-    # 4. Strict Bitrate & Audio Budgeting (guarantee final container strictly under 4200 MB)
-    source_bitrate, duration = probe_video_properties(video_abs_path)
-    if source_bitrate > 50000:
-        source_bitrate = int(source_bitrate / 1000)
+    # 1080p Hardsubbing: 4-Core CPU libx264, preset veryfast, crf 23, copy audio
+    sub_style = "FontSize=20,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=3"
+    sub_filter_rel = f"subtitles=sub.srt:force_style='{sub_style}'"
 
-    MAX_CONTAINER_MB = 4200
-    if duration > 0:
-        total_max_kbps = int((MAX_CONTAINER_MB * 8192) / duration)
-        ceiling_video_kbps = max(1200, total_max_kbps - 400)
-        target_bitrate = min(int(source_bitrate * 1.05), ceiling_video_kbps)
-        max_rate = min(int(target_bitrate * 1.25), ceiling_video_kbps)
-    else:
-        ceiling_video_kbps = 2500
-        target_bitrate = min(int(source_bitrate * 1.05), ceiling_video_kbps)
-        max_rate = min(int(target_bitrate * 1.25), ceiling_video_kbps)
-
-    bufsize = max_rate * 2
-    cq_val = 22 if duration > 9000 else 20
-
-    log("HARDSUB", f"Dynamic Bitrate Profile: duration={duration:.0f}s, cq={cq_val}, source={source_bitrate} kbps -> target={target_bitrate}k, maxrate={max_rate}k (ceiling={ceiling_video_kbps}k, bufsize={bufsize}k, max 4200MB)")
-
-    log("HARDSUB", f"Burning Arabic subtitles into frames (NVENC p6/cq{cq_val}): output_subbed.mp4 in {staging_dir}...")
+    log("HARDSUB", f"Burning Arabic subtitles into 1080p frames (CPU 4 threads, veryfast, crf 23): output_1080p.mp4 in {staging_dir}...")
     cmd = [
         "ffmpeg", "-y",
         "-i", ffmpeg_input,
-        "-vf", subtitles_filter,
-        "-c:v", "h264_nvenc",
-        "-preset", "p6",
-        "-tune", "hq",
-        "-rc", "vbr",
-        "-cq", str(cq_val),
-        "-b:v", f"{target_bitrate}k",
-        "-maxrate", f"{max_rate}k",
-        "-bufsize", f"{bufsize}k",
-        "-pix_fmt", "yuv420p",
+        "-vf", sub_filter_rel,
+        "-c:v", "libx264",
+        "-preset", "veryfast",
+        "-crf", "23",
+        "-threads", "4",
         "-c:a", "copy",
-        "output_subbed.mp4"
+        "output_1080p.mp4"
     ]
 
     proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=staging_dir)
     if proc.returncode != 0:
         err_snippet = proc.stderr[-300:] if proc.stderr else ""
-        log("HARDSUB", f"NVENC hardsubbing error ({proc.returncode}): {err_snippet}. Attempting CPU fallback (libx264 ultrafast / crf {cq_val})...")
-        cmd_cpu = [
+        log("HARDSUB", f"Notice on relative subtitle filter ({proc.returncode}): {err_snippet}. Retrying with escaped absolute subtitle path...")
+        sub_abs_escaped = os.path.abspath(staged_clean_srt).replace("\\", "/").replace(":", r"\:")
+        sub_filter_abs = f"subtitles='{sub_abs_escaped}':force_style='{sub_style}'"
+        cmd_abs = [
             "ffmpeg", "-y",
             "-i", ffmpeg_input,
-            "-vf", subtitles_filter,
+            "-vf", sub_filter_abs,
             "-c:v", "libx264",
-            "-preset", "ultrafast",
-            "-crf", str(cq_val),
-            "-b:v", f"{target_bitrate}k",
-            "-maxrate", f"{max_rate}k",
-            "-bufsize", f"{bufsize}k",
-            "-pix_fmt", "yuv420p",
+            "-preset", "veryfast",
+            "-crf", "23",
+            "-threads", "4",
             "-c:a", "copy",
-            "output_subbed.mp4"
+            "output_1080p.mp4"
         ]
-        proc_cpu = subprocess.run(cmd_cpu, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=staging_dir)
-        if proc_cpu.returncode != 0:
-            cpu_snippet = proc_cpu.stderr[-300:] if proc_cpu.stderr else ""
-            log("HARDSUB", f"❌ CPU fallback failed ({proc_cpu.returncode}): {cpu_snippet}")
-            for p in [staged_input, staged_sub]:
-                if os.path.exists(p) or os.path.islink(p):
-                    try: os.remove(p)
-                    except Exception: pass
+        proc = subprocess.run(cmd_abs, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=staging_dir)
+        if proc.returncode != 0:
+            err_snippet = proc.stderr[-300:] if proc.stderr else ""
+            log("HARDSUB", f"❌ Hardsubbing failed ({proc.returncode}): {err_snippet}")
             if verify_video_integrity(video_path):
                 log("HARDSUB", "Falling back to intact original video file.")
                 return video_path
             else:
                 raise RuntimeError(f"Downloaded file is corrupted or incomplete; aborting upload. ({video_path})")
 
-    # Clean up staging input symlink and subtitle file
-    for p in [staged_input, staged_sub]:
-        if os.path.exists(p) or os.path.islink(p):
-            try: os.remove(p)
-            except Exception: pass
+    # Clean up staging input symlink
+    if os.path.exists(staged_input) or os.path.islink(staged_input):
+        try: os.remove(staged_input)
+        except Exception: pass
 
     if os.path.exists(staged_output) and os.path.getsize(staged_output) > 0:
         if verify_video_integrity(staged_output):
             file_size_mb = os.path.getsize(staged_output) / (1024 * 1024)
-            log("HARDSUB", f"✅ Hardsubbing complete and verified intact! Video: {staged_output} ({file_size_mb:.1f} MB)")
+            log("HARDSUB", f"✅ 1080p Hardsubbing complete and verified intact! Video: {staged_output} ({file_size_mb:.1f} MB)")
             return staged_output
         else:
-            log("HARDSUB", f"⚠️ Hardsubbed output failed integrity verification! Checking original video...")
+            log("HARDSUB", "⚠️ Hardsubbed output failed integrity verification! Checking original video...")
             if verify_video_integrity(video_path):
                 return video_path
             raise RuntimeError(f"Downloaded file is corrupted or incomplete; aborting upload. ({video_path})")
@@ -1195,6 +1134,42 @@ def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
     if verify_video_integrity(video_path):
         return video_path
     raise RuntimeError(f"Downloaded file is corrupted or incomplete; aborting upload. ({video_path})")
+
+def downscale_to_720p(input_1080p_path: str, output_720p_path: str = None) -> str:
+    """
+    Subbed Downscaling (720p Generation):
+    Directly downscales 1080p hardsubbed video to 720p using fast scaling:
+    ffmpeg -i output_1080p.mp4 -vf "scale=-2:720" -c:v libx264 -preset veryfast -crf 24 -threads 4 -c:a copy output_720p.mp4
+    """
+    if not output_720p_path:
+        staging_dir = os.path.dirname(input_1080p_path)
+        output_720p_path = os.path.join(staging_dir, "output_720p.mp4")
+
+    if os.path.exists(output_720p_path):
+        try: os.remove(output_720p_path)
+        except Exception: pass
+
+    log("HARDSUB", f"Downscaling to 720p (scale=-2:720, crf 24, 4 threads): {os.path.basename(input_1080p_path)} -> {os.path.basename(output_720p_path)}...")
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", input_1080p_path,
+        "-vf", "scale=-2:720",
+        "-c:v", "libx264",
+        "-preset", "veryfast",
+        "-crf", "24",
+        "-threads", "4",
+        "-c:a", "copy",
+        output_720p_path
+    ]
+    proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    if proc.returncode != 0:
+        err_snippet = proc.stderr[-300:] if proc.stderr else "Unknown error"
+        log("HARDSUB", f"❌ 720p downscaling error ({proc.returncode}): {err_snippet}")
+        raise RuntimeError(f"FFmpeg 720p downscaling failed: {err_snippet}")
+
+    mb = os.path.getsize(output_720p_path) / (1024 * 1024)
+    log("HARDSUB", f"✅ 720p downscaling complete ({mb:.1f} MB) -> {os.path.basename(output_720p_path)}")
+    return output_720p_path
 
 # =============================================================================
 # 5. STREAMING HOST UPLOAD (DOODSTREAM API) WITH RESILIENCE & RETRIES
@@ -1612,6 +1587,8 @@ def publish_movie_to_pantheon(
         "vote_average": imdb_rating,
         "_imdb_rating": imdb_rating,
         "embed_url": embed_url,
+        "doodstream_url": dood_clean,
+        "streamtape_url": streamtape_clean,
         "dood_embed": dood_clean,
         "streamtape_embed": streamtape_clean,
         "embed_url_1080p": dood_clean or (embed_url if "1080" in quality else ""),
@@ -1659,22 +1636,26 @@ def publish_movie_to_pantheon(
 # =============================================================================
 # MASTER PIPELINE ORCHESTRATOR
 # =============================================================================
-def run_pipeline(movie_title: str, release_year: str = None, imdb_id: str = None, preferred_quality: str = "1080p"):
+def run_pipeline(movie_title: str, release_year: str = None, imdb_id: str = None, preferred_quality: str = "both"):
     """
     End-to-End Execution:
-    TMDB -> YTS Torrent -> aria2c (.mp4) -> Arabic .srt Download
-    -> FFmpeg Hardsubbing (*_subbed.mp4) -> Resilient DoodStream Upload -> Pantheon Headless WP
+    TMDB -> YTS 1080p Torrent -> aria2c (.mp4) -> Arabic .srt Download
+    -> FFmpeg 1080p Hardsubbing -> Subbed 720p Downscaling
+    -> Multi-Server Upload (1080p to Doodstream, 720p to Streamtape)
+    -> Pantheon Headless WP with doodstream_url & streamtape_url -> Immediate Cleanup
     """
     print("=" * 75)
-    print("  EGYMAX CLOUD AUTOMATION PIPELINE (TMDB + YTS + ARABIC HARDSUB + PANTHEON)")
+    print("  EGYMAX CLOUD AUTOMATION PIPELINE (OPTIMIZED DUAL-QUALITY ENGINE)")
     print("=" * 75)
 
     # 1. Fetch TMDB Metadata
     meta = fetch_tmdb_metadata(movie_title, release_year, imdb_id)
 
-    # 2. Fetch YTS Torrent
+    # 2. Fetch 1080p YTS Torrent Source
+    # Requirement 1: When processing movies or series episodes, download only the 1080p source torrent.
     target_imdb = meta.get("imdb_id") or imdb_id
-    torrent_info = fetch_yts_torrent(meta["title"], meta["year"], target_imdb, preferred_quality)
+    fetch_quality = "1080p" if preferred_quality in ("both", "multi", "all") else preferred_quality
+    torrent_info = fetch_yts_torrent(meta["title"], meta["year"], target_imdb, fetch_quality)
 
     # Synchronize authoritative IMDb rating from YTS if present
     if torrent_info.get("imdb_rating"):
@@ -1689,60 +1670,93 @@ def run_pipeline(movie_title: str, release_year: str = None, imdb_id: str = None
     # 4. Fetch Arabic Subtitles (.srt)
     arabic_srt_path = download_subtitles_for_imdb(target_imdb, DOWNLOAD_DIR)
 
-    # 5. Burn Arabic Subtitles directly into video frames
-    burned_video_path = burn_arabic_subtitles(raw_video_path, arabic_srt_path)
+    # 5. Burn Arabic Subtitles directly into 1080p video frames once
+    burned_1080p_path = burn_arabic_subtitles(raw_video_path, arabic_srt_path)
 
-    # Accurate subtitle status evaluation (prevents false positive 'Burned In' report)
+    # Accurate subtitle status evaluation
     if not arabic_srt_path:
         arabic_sub_status = "None (No Arabic Subtitle Found)"
-    elif (burned_video_path != raw_video_path and 
-          os.path.exists(burned_video_path) and 
-          os.path.getsize(burned_video_path) > 0):
+    elif (burned_1080p_path != raw_video_path and 
+          os.path.exists(burned_1080p_path) and 
+          os.path.getsize(burned_1080p_path) > 0):
         arabic_sub_status = "Burned In"
     else:
         arabic_sub_status = "Failed (Uploaded Original Unsubbed)"
 
     log("PIPELINE", f"Subtitling status: {arabic_sub_status}")
 
-    # Dynamically rename final video so DoodStream registers the clean movie title
+    # Requirement 4: Disk Safety - Immediately delete raw source video once 1080p hardsub completes
+    if raw_video_path and os.path.exists(raw_video_path) and burned_1080p_path != raw_video_path:
+        try:
+            os.remove(raw_video_path)
+            log("CLEANUP", f"Immediately deleted raw source video to free disk: {os.path.basename(raw_video_path)}")
+            raw_video_path = None
+        except Exception as e:
+            log("CLEANUP", f"Notice removing raw video: {e}")
+
+    # Dynamically rename 1080p video so streaming hosts register clean movie title
     title_en = meta.get("title") or movie_title or "Movie"
-    release_year = meta.get("year") or ""
+    release_year_val = meta.get("year") or ""
     clean_title = re.sub(r'[^\w\s-]', '', title_en).strip().replace(' ', '.')
-    if release_year:
-        final_filename = f"{clean_title}.{release_year}.1080p.Arabic.Hardsub.mp4"
+    file_dir = os.path.dirname(burned_1080p_path)
+    if release_year_val:
+        final_1080p_filename = f"{clean_title}.{release_year_val}.1080p.Arabic.Hardsub.mp4"
     else:
-        final_filename = f"{clean_title}.1080p.Arabic.Hardsub.mp4"
-    final_filepath = os.path.join(os.path.dirname(burned_video_path), final_filename)
+        final_1080p_filename = f"{clean_title}.1080p.Arabic.Hardsub.mp4"
+    final_1080p_filepath = os.path.join(file_dir, final_1080p_filename)
 
-    if os.path.exists(burned_video_path):
-        if burned_video_path != final_filepath:
-            if os.path.exists(final_filepath):
-                try:
-                    os.remove(final_filepath)
-                except Exception:
-                    pass
-            os.rename(burned_video_path, final_filepath)
-            log("PIPELINE", f"Renamed upload file for DoodStream: {final_filename}")
-        burned_video_path = final_filepath
+    if os.path.exists(burned_1080p_path):
+        if burned_1080p_path != final_1080p_filepath:
+            if os.path.exists(final_1080p_filepath):
+                try: os.remove(final_1080p_filepath)
+                except Exception: pass
+            os.rename(burned_1080p_path, final_1080p_filepath)
+            log("PIPELINE", f"Renamed 1080p upload file: {final_1080p_filename}")
+        burned_1080p_path = final_1080p_filepath
 
-    # 6. Quality Distribution & Multi-Server Upload
-    # 1080p Quality -> Automatically uploaded to Doodstream (Server 1)
-    # 720p Quality  -> Automatically uploaded to Streamtape (Server 2)
-    # Supports 'both' / 'multi' to upload to both platforms for dual-server playback
-    if not verify_video_integrity(burned_video_path):
-        raise RuntimeError(f"Downloaded file is corrupted or incomplete; aborting upload. ({burned_video_path})")
+    if not verify_video_integrity(burned_1080p_path):
+        raise RuntimeError(f"Rendered 1080p file is corrupted or incomplete; aborting upload. ({burned_1080p_path})")
 
-    active_quality = torrent_info.get("quality", preferred_quality)
+    dood_url = None
+    streamtape_url = None
+    rendered_720p_path = None
+
+    # Requirement 2: Subbed Downscaling (720p Generation) & Requirement 3: Multi-Server Upload
     if preferred_quality in ("both", "multi", "all"):
-        upload_res = upload_to_multi_servers(burned_video_path, active_quality)
+        final_720p_filename = f"{clean_title}.{release_year_val}.720p.Arabic.Hardsub.mp4" if release_year_val else f"{clean_title}.720p.Arabic.Hardsub.mp4"
+        rendered_720p_path = os.path.join(file_dir, final_720p_filename)
+        downscale_to_720p(burned_1080p_path, rendered_720p_path)
+
+        # Upload output_1080p.mp4 to Doodstream
+        log("UPLOAD", "Uploading 1080p Hardsub to Doodstream (Server 1)...")
+        dood_url = upload_to_doodstream(burned_1080p_path)
+
+        # Upload output_720p.mp4 to Streamtape
+        log("UPLOAD", "Uploading 720p Downscaled Hardsub to Streamtape (Server 2)...")
+        streamtape_url = upload_to_streamtape(rendered_720p_path)
+
+        primary_embed = dood_url or streamtape_url
+        active_quality = "1080p & 720p"
+    elif "720" in preferred_quality.lower():
+        final_720p_filename = f"{clean_title}.{release_year_val}.720p.Arabic.Hardsub.mp4" if release_year_val else f"{clean_title}.720p.Arabic.Hardsub.mp4"
+        rendered_720p_path = os.path.join(file_dir, final_720p_filename)
+        downscale_to_720p(burned_1080p_path, rendered_720p_path)
+        if os.path.exists(burned_1080p_path):
+            try:
+                os.remove(burned_1080p_path)
+                burned_1080p_path = None
+            except Exception: pass
+        log("UPLOAD", "Uploading 720p Hardsub to Streamtape (Server 2)...")
+        streamtape_url = upload_to_streamtape(rendered_720p_path)
+        primary_embed = streamtape_url
+        active_quality = "720p"
     else:
-        upload_res = upload_by_quality(burned_video_path, active_quality)
+        log("UPLOAD", "Uploading 1080p Hardsub to Doodstream (Server 1)...")
+        dood_url = upload_to_doodstream(burned_1080p_path)
+        primary_embed = dood_url
+        active_quality = "1080p"
 
-    primary_embed = upload_res["primary_embed"]
-    dood_url = upload_res.get("dood_embed")
-    streamtape_url = upload_res.get("streamtape_embed")
-
-    # 7. Publish directly to Pantheon WordPress (clean embed URL inside double-quoted iframe)
+    # 6. Publish directly to Pantheon WordPress
     post_data = publish_movie_to_pantheon(
         meta,
         primary_embed,
@@ -1751,13 +1765,24 @@ def run_pipeline(movie_title: str, release_year: str = None, imdb_id: str = None
         streamtape_embed=streamtape_url
     )
 
-    # 8. Cleanup temporary files: original .mp4, .srt, and the generated *_subbed.mp4
-    cleanup_targets = set([raw_video_path, burned_video_path, arabic_srt_path])
-    for path in cleanup_targets:
-        if path and os.path.exists(path):
+    # 7. Requirement 4: Disk Safety - Immediately delete raw source, temporary subtitles, and rendered files
+    cleanup_targets = [raw_video_path, burned_1080p_path, rendered_720p_path, arabic_srt_path]
+    for p in cleanup_targets:
+        if p and os.path.exists(p):
             try:
-                os.remove(path)
-                log("CLEANUP", f"Cleaned up {os.path.basename(path)}")
+                os.remove(p)
+                log("CLEANUP", f"Immediately deleted rendered/temporary file: {os.path.basename(p)}")
+            except Exception:
+                pass
+
+    # Purge staging directory artifacts
+    staging_dir = "/content/staging" if os.path.exists("/content") else os.path.abspath("./staging_temp")
+    if os.path.exists(staging_dir):
+        for f in os.listdir(staging_dir):
+            fp = os.path.join(staging_dir, f)
+            try:
+                if os.path.islink(fp) or os.path.isfile(fp):
+                    os.remove(fp)
             except Exception:
                 pass
 
@@ -1767,8 +1792,8 @@ def run_pipeline(movie_title: str, release_year: str = None, imdb_id: str = None
     print(f"  Rating:     ★ {meta.get('imdb_rating') or meta.get('rating')}")
     print(f"  Quality:    {active_quality}")
     print(f"  Arabic Sub: {arabic_sub_status}")
-    print(f"  Server 1:   {dood_url or 'N/A'} (DoodStream)")
-    print(f"  Server 2:   {streamtape_url or 'N/A'} (Streamtape)")
+    print(f"  Server 1:   {dood_url or 'N/A'} (DoodStream 1080p)")
+    print(f"  Server 2:   {streamtape_url or 'N/A'} (Streamtape 720p)")
     print(f"  Primary:    {primary_embed}")
     print(f"  Live Post:  {post_data.get('link')}")
     print(f"  Next.js:    {NEXTJS_URL}/movie/{post_data.get('slug')}")
@@ -1778,7 +1803,7 @@ def run_pipeline(movie_title: str, release_year: str = None, imdb_id: str = None
 # =============================================================================
 # BATCH / BULK PROCESSING ENGINE
 # =============================================================================
-def run_batch_pipeline(items: list, preferred_quality: str = "1080p") -> list:
+def run_batch_pipeline(items: list, preferred_quality: str = "both") -> list:
     """
     Process, download, and upload a list/array of movie titles, episode names, or links sequentially.
     Handles errors per item gracefully so one failure does not break the entire batch.
