@@ -308,6 +308,7 @@ export function parseMovieData(post) {
     slug: post.slug,
     rawTitle,
     cleanTitle,
+    title: cleanTitle || rawTitle,
     displayTitle: cleanTitle || rawTitle,
     titleAr,
     year,

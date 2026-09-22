@@ -10,17 +10,93 @@ export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
 export async function generateMetadata({ params }) {
-  const post = await getMovieBySlug(params.slug);
-  if (!post) return { title: 'الفيلم غير موجود | EGYMAX' };
-  
-  const movie = parseMovieData(post);
-  const description = movie.seoDescription || 
-    `مشاهدة وتحميل فيلم ${movie.displayTitle} (${movie.year}) مترجم بجودة فائقة ${movie.quality} بدقة 1080p مجاناً على سيرفرات سريعة حصرياً على EGYMAX.`;
+  try {
+    const post = await getMovieBySlug(params.slug);
+    if (!post) {
+      return {
+        title: 'الفيلم غير موجود - EgyMax',
+        description: 'عذراً، الفيلم المطلوب غير متوفر حالياً على منصة EgyMax.',
+      };
+    }
 
-  return {
-    title: `مشاهدة فيلم ${movie.displayTitle} (${movie.year}) مترجم | EGYMAX`,
-    description,
-  };
+    const movie = parseMovieData(post);
+    if (!movie) {
+      return {
+        title: 'الفيلم غير موجود - EgyMax',
+        description: 'عذراً، الفيلم المطلوب غير متوفر حالياً على منصة EgyMax.',
+      };
+    }
+
+    // 1. Smart Marketing Title for Google Search and browser tabs:
+    // Format: "مشاهدة فيلم ${movie.title} مترجم اون لاين - EgyMax"
+    const movieTitle = (movie.title || movie.displayTitle || movie.cleanTitle || movie.rawTitle || '').trim();
+    const metaTitle = movieTitle
+      ? `مشاهدة فيلم ${movieTitle} مترجم اون لاين - EgyMax`
+      : 'مشاهدة فيلم مترجم اون لاين - EgyMax';
+
+    // 2. Clean Excerpt / Description for Meta Description tag
+    let metaDescription = movie.seoDescription || movie.synopsis || '';
+    if (!metaDescription && post.excerpt?.rendered) {
+      metaDescription = post.excerpt.rendered.replace(/<[^>]+>/g, '').trim();
+    }
+    if (!metaDescription && post.content?.rendered) {
+      metaDescription = post.content.rendered
+        .replace(/<[^>]+>/g, '')
+        .replace(/(Rating|Release Year|Genres|Quality):[^\n]+/gi, '')
+        .replace(/★\s*[0-9.]+/g, '')
+        .trim();
+    }
+    metaDescription = metaDescription.replace(/\s+/g, ' ').trim();
+
+    if (!metaDescription || metaDescription.length < 15) {
+      metaDescription = `مشاهدة وتحميل فيلم ${movieTitle || 'الفيلم'} (${movie.year || '2026'}) مترجم كامل بجودة فائقة ${movie.quality || '1080p'} بدقة عالية اون لاين حصرياً على منصة EgyMax.`;
+    } else if (metaDescription.length > 170) {
+      metaDescription = metaDescription.slice(0, 165).trim() + '...';
+    }
+
+    // 3. OpenGraph & Twitter Share Tags (Facebook, Telegram, WhatsApp, etc.)
+    const posterUrl = movie.posterUrl && !movie.posterUrl.includes('placeholder')
+      ? movie.posterUrl
+      : 'https://egymax.vercel.app/icon.svg';
+
+    const pageUrl = `https://egymax.vercel.app/movie/${params.slug}`;
+
+    return {
+      title: metaTitle,
+      description: metaDescription,
+      alternates: {
+        canonical: pageUrl,
+      },
+      openGraph: {
+        title: metaTitle,
+        description: metaDescription,
+        url: pageUrl,
+        siteName: 'EgyMax',
+        locale: 'ar_EG',
+        type: 'video.movie',
+        images: [
+          {
+            url: posterUrl,
+            width: 1200,
+            height: 630,
+            alt: `بوستر فيلم ${movieTitle || 'الفيلم'}`,
+          },
+        ],
+      },
+      twitter: {
+        card: 'summary_large_image',
+        title: metaTitle,
+        description: metaDescription,
+        images: [posterUrl],
+      },
+    };
+  } catch (error) {
+    console.error(`[SEO] generateMetadata error for slug "${params.slug}":`, error.message);
+    return {
+      title: 'مشاهدة وتحميل أحدث الأفلام مترجمة اون لاين - EgyMax',
+      description: 'شاهد وحمل أحدث الأفلام والمسلسلات الحصرية مترجمة بجودة فائقة اون لاين على منصة EgyMax.',
+    };
+  }
 }
 
 // Helper to derive high-speed direct download link from DoodStream or direct sources
