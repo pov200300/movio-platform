@@ -21,7 +21,7 @@ import zipfile
 import io
 import requests
 import subprocess
-from urllib.parse import quote
+from urllib.parse import quote, quote_plus
 from requests.auth import HTTPBasicAuth
 from bs4 import BeautifulSoup
 
@@ -75,7 +75,16 @@ STAGING_DIR = "/content/staging" if os.path.exists("/content") else os.path.absp
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    "Accept": "application/json, text/plain, */*",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,application/json,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Sec-Ch-Ua": '"Not-A.Brand";v="99", "Chromium";v="124", "Google Chrome";v="124"',
+    "Sec-Ch-Ua-Mobile": "?0",
+    "Sec-Ch-Ua-Platform": '"Windows"',
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+    "Upgrade-Insecure-Requests": "1"
 }
 
 def log(tag: str, msg: str):
@@ -483,97 +492,135 @@ def fetch_tv_metadata(show_name: str, season_num: int = 1, episode_num: int = 1,
 
 def matches_show_tokens(show_name: str, title: str) -> bool:
     """
-    Enforce exact token matching for show_name against torrent title
-    to prevent false matches (e.g., rejecting "Breaking Brad" when looking for "Breaking Bad").
+    Enforce exact token and phrase matching for show_name against torrent title
+    to prevent false matches (e.g., rejecting "Breaking Brad" and "The Bad Guys Breaking In" when looking for "Breaking Bad").
     """
-    norm_show = re.sub(r"['’]", "", show_name)
-    show_tokens = [re.escape(w.lower()) for w in re.sub(r'[^\w\s]', ' ', norm_show).split() if w]
-    norm_title = re.sub(r"['’]", "", title)
-    clean_title = re.sub(r'[._\-]', ' ', norm_title).lower()
-    return all(re.search(rf"\b{tok}\b", clean_title) for tok in show_tokens)
+    norm_show = re.sub(r"['’]", "", show_name).lower()
+    norm_show = re.sub(r'[^\w\s]', ' ', norm_show)
+    show_words = [re.escape(w) for w in norm_show.split() if w]
+    if not show_words:
+        return True
+    show_phrase = r'\s+'.join(show_words)
+    
+    norm_title = re.sub(r"['’]", "", title).lower()
+    clean_title = re.sub(r'[._\-]', ' ', norm_title)
+    
+    # 1. Exact phrase sequence check
+    if re.search(rf"\b{show_phrase}\b", clean_title):
+        return True
+    # 2. Whole-word token check
+    return all(re.search(rf"\b{tok}\b", clean_title) for tok in show_words)
 
-def fetch_eztv_torrent(show_name: str, season_num: int, episode_num: int, imdb_id: str = None, preferred_quality: str = "1080p") -> dict:
+def fetch_tv_torrent(show_name: str, season_num: int, episode_num: int, imdb_id: str = None, preferred_quality: str = "1080p") -> dict:
     """
-    Dedicated TV Torrent Resolver using the public, keyless EZTV API (https://eztv.re/api/get-torrents)
-    with public swarm indexer fallback.
-    - Strict title matching: ensures all tokens of show_name match (rejects false matches like Breaking Brad).
-    - Seeders validation: filters out dead releases (seeds <= 0).
-    - Quality & seeders sorting: prioritizes 1080p -> 720p, sorted descending by active seeds count.
+    Unified Multi-Indexer TV Torrent Resolver:
+    1. Primary Swarm Indexer: APIBay (The Pirate Bay API - open, fast, no Cloudflare/Colab blocks).
+    2. Secondary Swarm Indexer: EZTV API across active mirrors.
+    3. Tertiary Swarm Indexer: Torrentio public stream provider.
+    - Exact token & phrase validation prevents false matches.
+    - Enforces seeds > 0 (filters out dead swarms).
+    - Sorts matching releases by quality (1080p -> 720p) and active seeds count descending.
     """
-    mirrors = ["https://eztvx.to", "https://eztv.re", "https://eztv.wf", "https://eztv.tf", "https://eztv.yt"]
     episode_tag = f"S{season_num:02d}E{episode_num:02d}"
-    log("EZTV", f"Searching EZTV for {show_name} {episode_tag} (IMDb: {imdb_id or 'N/A'})...")
-
-    # Clean numeric IMDb ID (e.g. tt0944947 -> 0944947 / 944947)
-    num_imdb = None
-    if imdb_id:
-        num_imdb = re.sub(r'[^0-9]', '', imdb_id)
+    log("TV", f"Searching TV torrent swarms for {show_name} {episode_tag} (IMDb: {imdb_id or 'N/A'})...")
 
     matched_torrents = []
 
-    # 1. Query EZTV API across mirrors
-    for mirror in mirrors:
-        if matched_torrents:
-            break
-        # Test pages 1 to 3
-        for page in range(1, 4):
-            params = {"limit": 100, "page": page}
-            if num_imdb:
-                params["imdb_id"] = num_imdb
-            try:
-                api_url = f"{mirror}/api/get-torrents"
-                r = requests.get(api_url, params=params, headers=HEADERS, timeout=12)
-                if r.status_code == 200:
-                    data = r.json()
-                    torrents = data.get("torrents", [])
-                    if not torrents:
-                        break
-                    for t in torrents:
-                        t_title = t.get("title", "")
-                        # 1. Strict Title Token Matching: reject false matches
-                        if not matches_show_tokens(show_name, t_title):
-                            continue
-                        t_season = int(t.get("season") or 0)
-                        t_episode = int(t.get("episode") or 0)
-                        # Check season and episode match
-                        if (t_season == season_num and t_episode == episode_num) or re.search(rf"\bS0*{season_num}E0*{episode_num}\b", t_title, re.IGNORECASE):
-                            s_count = int(t.get("seeds") or 0)
-                            matched_torrents.append({
-                                "title": t_title,
-                                "torrent_url": t.get("torrent_url"),
-                                "magnet_uri": t.get("magnet_url"),
-                                "seeds": s_count,
-                                "size_bytes": t.get("size_bytes") or 0,
-                                "source": "EZTV"
-                            })
-                    if matched_torrents:
-                        log("EZTV", f"Connected to {mirror} (Page {page}): found {len(matched_torrents)} matching releases for {episode_tag}")
-                        break
-            except Exception:
-                continue
+    trackers_list = [
+        "udp://tracker.opentrackr.org:1337/announce",
+        "udp://open.stealth.si:80/announce",
+        "udp://tracker.torrent.eu.org:451/announce",
+        "udp://tracker.bittor.pw:1337/announce",
+        "udp://public.popcorn-tracker.org:6969/announce",
+        "udp://tracker.dler.org:6969/announce",
+        "udp://exodus.desync.com:6969",
+        "udp://open.demonii.com:1337/announce"
+    ]
+    trackers_query = "".join(f"&tr={quote(tr)}" for tr in trackers_list)
 
-    # Filter out releases where seeds <= 0
-    valid_torrents = [t for t in matched_torrents if t["seeds"] > 0]
+    # 1. Primary Indexer: APIBay (The Pirate Bay API - open, no Cloudflare, Google Colab friendly)
+    try:
+        apibay_query = f"{show_name} {episode_tag}"
+        apibay_url = f"https://apibay.org/q.php?q={quote_plus(apibay_query)}"
+        r = requests.get(apibay_url, headers=HEADERS, timeout=8)
+        if r.status_code == 200:
+            items = r.json()
+            if isinstance(items, list):
+                for item in items:
+                    name = item.get("name", "")
+                    info_hash = item.get("info_hash", "")
+                    if not info_hash or info_hash == "0000000000000000000000000000000000000000" or name == "No results returned":
+                        continue
+                    if not matches_show_tokens(show_name, name):
+                        continue
+                    if not re.search(rf"\bS0*{season_num}E0*{episode_num}\b", name, re.IGNORECASE):
+                        continue
+                    seeds = int(item.get("seeders") or 0)
+                    if seeds <= 0:
+                        continue
+                    magnet = f"magnet:?xt=urn:btih:{info_hash}&dn={quote(name)}{trackers_query}"
+                    matched_torrents.append({
+                        "title": name,
+                        "torrent_url": None,
+                        "magnet_uri": magnet,
+                        "seeds": seeds,
+                        "size_bytes": int(item.get("size") or 0),
+                        "source": "APIBay"
+                    })
+                if matched_torrents:
+                    log("TV", f"APIBay resolved {len(matched_torrents)} active releases with seeds > 0 for {episode_tag}")
+    except Exception as e:
+        log("TV", f"APIBay query notice: {e}")
 
-    # 2. Resilient Fallback: If EZTV has no active seeds or zero matching releases, query public TV swarm indexer
-    if not valid_torrents and imdb_id:
-        log("EZTV", f"No active releases with seeds > 0 on EZTV. Checking public torrent swarm indexer...")
+    # 2. Secondary Indexer: EZTV API across active mirrors
+    if not matched_torrents:
+        mirrors = ["https://eztvx.to", "https://eztv.re", "https://eztv.wf", "https://eztv.tf", "https://eztv.yt"]
+        num_imdb = re.sub(r'[^0-9]', '', imdb_id) if imdb_id else ""
+        for mirror in mirrors:
+            if matched_torrents:
+                break
+            for page in range(1, 4):
+                params = {"limit": 100, "page": page}
+                if num_imdb:
+                    params["imdb_id"] = num_imdb
+                try:
+                    api_url = f"{mirror}/api/get-torrents"
+                    r = requests.get(api_url, params=params, headers=HEADERS, timeout=10)
+                    if r.status_code == 200:
+                        torrents = r.json().get("torrents", [])
+                        if not torrents:
+                            break
+                        for t in torrents:
+                            t_title = t.get("title", "")
+                            if not matches_show_tokens(show_name, t_title):
+                                continue
+                            t_season = int(t.get("season") or 0)
+                            t_episode = int(t.get("episode") or 0)
+                            if (t_season == season_num and t_episode == episode_num) or re.search(rf"\bS0*{season_num}E0*{episode_num}\b", t_title, re.IGNORECASE):
+                                s_count = int(t.get("seeds") or 0)
+                                if s_count > 0:
+                                    matched_torrents.append({
+                                        "title": t_title,
+                                        "torrent_url": t.get("torrent_url"),
+                                        "magnet_uri": t.get("magnet_url"),
+                                        "seeds": s_count,
+                                        "size_bytes": t.get("size_bytes") or 0,
+                                        "source": "EZTV"
+                                    })
+                        if matched_torrents:
+                            log("TV", f"EZTV ({mirror}) resolved {len(matched_torrents)} releases for {episode_tag}")
+                            break
+                except Exception:
+                    continue
+
+    # 3. Tertiary Fallback: Torrentio public stream provider
+    if not matched_torrents and imdb_id:
         try:
             full_imdb = imdb_id if imdb_id.startswith("tt") else f"tt{imdb_id}"
             stream_url = f"https://torrentio.strem.fun/stream/series/{full_imdb}:{season_num}:{episode_num}.json"
             sr = requests.get(stream_url, headers=HEADERS, timeout=8)
             if sr.status_code == 200:
                 streams = sr.json().get("streams", [])
-                trackers_query = "".join(f"&tr={quote(tr)}" for tr in [
-                    "udp://tracker.opentrackr.org:1337/announce",
-                    "udp://open.stealth.si:80/announce",
-                    "udp://tracker.torrent.eu.org:451/announce",
-                    "udp://tracker.bittor.pw:1337/announce",
-                    "udp://public.popcorn-tracker.org:6969/announce",
-                    "udp://tracker.dler.org:6969/announce",
-                    "udp://exodus.desync.com:6969",
-                    "udp://open.demonii.com:1337/announce"
-                ])
                 for s in streams:
                     raw_title = s.get("title", "")
                     lines = [l.strip() for l in raw_title.split("\n") if l.strip()]
@@ -587,7 +634,7 @@ def fetch_eztv_torrent(show_name: str, season_num: int, episode_num: int, imdb_i
                     info_hash = s.get("infoHash")
                     if info_hash:
                         magnet = f"magnet:?xt=urn:btih:{info_hash}&dn={quote(rel_title)}{trackers_query}"
-                        valid_torrents.append({
+                        matched_torrents.append({
                             "title": rel_title,
                             "torrent_url": None,
                             "magnet_uri": magnet,
@@ -595,15 +642,17 @@ def fetch_eztv_torrent(show_name: str, season_num: int, episode_num: int, imdb_i
                             "size_bytes": 0,
                             "source": "Torrentio"
                         })
+                if matched_torrents:
+                    log("TV", f"Torrentio resolved {len(matched_torrents)} releases for {episode_tag}")
         except Exception as e:
-            log("EZTV", f"Public swarm fallback error: {e}")
+            log("TV", f"Torrentio notice: {e}")
 
-    # If no release has seeders > 0 across mirrors and fallbacks, raise a descriptive error immediately
+    # Filter out releases where seeds <= 0
+    valid_torrents = [t for t in matched_torrents if t["seeds"] > 0]
     if not valid_torrents:
-        raise RuntimeError(f"No active torrents with seeders > 0 found for TV episode '{show_name} {episode_tag}'. Swarm is inactive or unavailable.")
+        raise RuntimeError(f"No active torrents with seeders > 0 found for TV episode '{show_name} {episode_tag}'. Swarms are inactive across APIBay, EZTV, and indexers.")
 
-    # 3. Quality Prioritization & Seeds Sorting:
-    # Sort valid matching releases by quality preference first (1080p -> 720p) and then descending by seeds count
+    # Quality Prioritization & Seeds Sorting: 1080p -> 720p, sorted descending by seeds count
     def quality_tier(t):
         title = t.get("title", "").lower()
         pref = preferred_quality.lower()
@@ -622,7 +671,7 @@ def fetch_eztv_torrent(show_name: str, season_num: int, episode_num: int, imdb_i
     magnet_uri = selected_torrent.get("magnet_uri")
     torrent_url = selected_torrent.get("torrent_url")
 
-    log("EZTV", f"Selected release: '{selected_torrent.get('title')}' ({actual_quality}, seeds: {selected_torrent.get('seeds')}, source: {selected_torrent.get('source', 'EZTV')})")
+    log("TV", f"Selected release: '{selected_torrent.get('title')}' ({actual_quality}, seeds: {selected_torrent.get('seeds')}, source: {selected_torrent.get('source')})")
     return {
         "title": selected_torrent.get("title"),
         "quality": actual_quality,
@@ -631,6 +680,9 @@ def fetch_eztv_torrent(show_name: str, season_num: int, episode_num: int, imdb_i
         "seeds": selected_torrent.get("seeds", 0),
         "size_bytes": selected_torrent.get("size_bytes", 0)
     }
+
+# Backward compatibility alias
+fetch_eztv_torrent = fetch_tv_torrent
 
 # =============================================================================
 # 2. TORRENT ACQUISITION (YTS API FOR MOVIES)
