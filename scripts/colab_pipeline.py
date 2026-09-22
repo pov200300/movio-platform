@@ -1356,7 +1356,7 @@ def convert_srt_to_ass(srt_text: str, srt_path: str = None) -> str:
             temp_ass = temp_src + ".ass"
             try:
                 subprocess.run(
-                    [ffmpeg_bin, "-y", "-sub_charenc", "UTF-8", "-i", temp_src, temp_ass],
+                    [ffmpeg_bin, "-y", "-nostdin", "-sub_charenc", "UTF-8", "-i", temp_src, temp_ass],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                     check=False
@@ -1458,9 +1458,10 @@ def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
     sub_style = "FontSize=20,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=3"
     sub_filter_rel = f"subtitles=sub.srt:force_style='{sub_style}'"
 
+    ffmpeg_log = os.path.join(staging_dir, "ffmpeg_process.log")
     log("HARDSUB", f"Burning Arabic subtitles into 1080p frames (CPU 4 threads, veryfast, crf 23): output_1080p.mp4 in {staging_dir}...")
     cmd = [
-        "ffmpeg", "-y",
+        "ffmpeg", "-y", "-nostdin",
         "-i", ffmpeg_input,
         "-vf", sub_filter_rel,
         "-c:v", "libx264",
@@ -1471,14 +1472,20 @@ def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
         "output_1080p.mp4"
     ]
 
-    proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=staging_dir)
+    with open(ffmpeg_log, "w", encoding="utf-8") as lf:
+        proc = subprocess.run(cmd, stdout=lf, stderr=lf, cwd=staging_dir)
     if proc.returncode != 0:
-        err_snippet = proc.stderr[-300:] if proc.stderr else ""
+        err_snippet = ""
+        try:
+            with open(ffmpeg_log, "r", encoding="utf-8", errors="replace") as ef:
+                err_snippet = "".join(ef.readlines()[-15:]).strip()
+        except Exception:
+            pass
         log("HARDSUB", f"Notice on relative subtitle filter ({proc.returncode}): {err_snippet}. Retrying with escaped absolute subtitle path...")
         sub_abs_escaped = os.path.abspath(staged_clean_srt).replace("\\", "/").replace(":", r"\:")
         sub_filter_abs = f"subtitles='{sub_abs_escaped}':force_style='{sub_style}'"
         cmd_abs = [
-            "ffmpeg", "-y",
+            "ffmpeg", "-y", "-nostdin",
             "-i", ffmpeg_input,
             "-vf", sub_filter_abs,
             "-c:v", "libx264",
@@ -1488,9 +1495,15 @@ def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
             "-c:a", "copy",
             "output_1080p.mp4"
         ]
-        proc = subprocess.run(cmd_abs, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=staging_dir)
+        with open(ffmpeg_log, "a", encoding="utf-8") as lf:
+            proc = subprocess.run(cmd_abs, stdout=lf, stderr=lf, cwd=staging_dir)
         if proc.returncode != 0:
-            err_snippet = proc.stderr[-300:] if proc.stderr else ""
+            err_snippet = ""
+            try:
+                with open(ffmpeg_log, "r", encoding="utf-8", errors="replace") as ef:
+                    err_snippet = "".join(ef.readlines()[-15:]).strip()
+            except Exception:
+                pass
             log("HARDSUB", f"❌ Hardsubbing failed ({proc.returncode}): {err_snippet}")
             if verify_video_integrity(video_path):
                 log("HARDSUB", "Falling back to intact original video file.")
@@ -1522,19 +1535,21 @@ def downscale_to_720p(input_1080p_path: str, output_720p_path: str = None) -> st
     """
     Subbed Downscaling (720p Generation):
     Directly downscales 1080p hardsubbed video to 720p using fast scaling:
-    ffmpeg -i output_1080p.mp4 -vf "scale=-2:720" -c:v libx264 -preset veryfast -crf 24 -threads 4 -c:a copy output_720p.mp4
+    ffmpeg -y -nostdin -i output_1080p.mp4 -vf "scale=-2:720" -c:v libx264 -preset veryfast -crf 24 -threads 4 -c:a copy output_720p.mp4
     """
+    staging_dir = os.path.dirname(input_1080p_path) or ("/content/staging" if os.path.exists("/content") else os.path.abspath("./staging_temp"))
+    os.makedirs(staging_dir, exist_ok=True)
     if not output_720p_path:
-        staging_dir = os.path.dirname(input_1080p_path)
         output_720p_path = os.path.join(staging_dir, "output_720p.mp4")
 
     if os.path.exists(output_720p_path):
         try: os.remove(output_720p_path)
         except Exception: pass
 
+    ffmpeg_log = os.path.join(staging_dir, "ffmpeg_process.log")
     log("HARDSUB", f"Downscaling to 720p (scale=-2:720, crf 24, 4 threads): {os.path.basename(input_1080p_path)} -> {os.path.basename(output_720p_path)}...")
     cmd = [
-        "ffmpeg", "-y",
+        "ffmpeg", "-y", "-nostdin",
         "-i", input_1080p_path,
         "-vf", "scale=-2:720",
         "-c:v", "libx264",
@@ -1544,11 +1559,17 @@ def downscale_to_720p(input_1080p_path: str, output_720p_path: str = None) -> st
         "-c:a", "copy",
         output_720p_path
     ]
-    proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    with open(ffmpeg_log, "a", encoding="utf-8") as lf:
+        proc = subprocess.run(cmd, stdout=lf, stderr=lf)
     if proc.returncode != 0:
-        err_snippet = proc.stderr[-300:] if proc.stderr else "Unknown error"
+        err_snippet = ""
+        try:
+            with open(ffmpeg_log, "r", encoding="utf-8", errors="replace") as ef:
+                err_snippet = "".join(ef.readlines()[-15:]).strip()
+        except Exception:
+            pass
         log("HARDSUB", f"❌ 720p downscaling error ({proc.returncode}): {err_snippet}")
-        raise RuntimeError(f"FFmpeg 720p downscaling failed: {err_snippet}")
+        raise RuntimeError(f"FFmpeg 720p downscaling failed ({proc.returncode}): {err_snippet}")
 
     mb = os.path.getsize(output_720p_path) / (1024 * 1024)
     log("HARDSUB", f"✅ 720p downscaling complete ({mb:.1f} MB) -> {os.path.basename(output_720p_path)}")
