@@ -1430,12 +1430,85 @@ def convert_srt_to_ass(srt_text: str, srt_path: str = None) -> str:
 
     return ""
 
+_HW_ACCEL_CONFIG = None
+
+def detect_hardware_acceleration(force_refresh: bool = False) -> dict:
+    """
+    Auto-Adaptive Universal Hardware Acceleration engine (Dynamic GPU/CPU switching):
+    1. Checks if an NVIDIA GPU is present and FFmpeg supports 'h264_nvenc'.
+    2. If NVENC is available:
+       - Mode: 'nvenc'
+       - 1080p Video Args: ["-c:v", "h264_nvenc", "-preset", "p4", "-cq", "23", "-spatial-aq", "1"]
+       - 720p Downscale Args: ["-c:v", "h264_nvenc", "-preset", "p4", "-cq", "24"]
+       - Log: [ACCEL] 🚀 Active GPU detected! Utilizing NVENC hardware acceleration.
+    3. If NO GPU / NVENC unavailable (Lightning AI, standard VPS, local CPU machine):
+       - Mode: 'cpu'
+       - 1080p Video Args: ["-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-threads", "0"]
+       - 720p Downscale Args: ["-c:v", "libx264", "-preset", "veryfast", "-crf", "24", "-threads", "0"]
+       - Note: Uses -threads 0 so FFmpeg dynamically uses all available CPU cores regardless of system specs.
+       - Log: [ACCEL] ⚙️ CPU environment detected. Utilizing multi-threaded libx264 (all cores).
+    Caches the configuration for subsequent calls unless force_refresh=True.
+    """
+    global _HW_ACCEL_CONFIG
+    if _HW_ACCEL_CONFIG is not None and not force_refresh:
+        return _HW_ACCEL_CONFIG
+
+    ffmpeg_bin = shutil.which("ffmpeg")
+    has_nvenc = False
+
+    if ffmpeg_bin:
+        try:
+            # 1. Fast query: check if h264_nvenc is compiled into FFmpeg
+            enc_proc = subprocess.run(
+                [ffmpeg_bin, "-encoders"],
+                capture_output=True,
+                text=True,
+                timeout=6
+            )
+            if "h264_nvenc" in (enc_proc.stdout or ""):
+                # 2. Hardware verification: run a minimal 0.1s null encode to verify GPU driver & silicon support
+                test_cmd = [
+                    ffmpeg_bin, "-y", "-nostdin",
+                    "-f", "lavfi", "-i", "color=c=black:s=256x256:d=0.1",
+                    "-c:v", "h264_nvenc",
+                    "-f", "null", "-"
+                ]
+                test_proc = subprocess.run(
+                    test_cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=6
+                )
+                if test_proc.returncode == 0:
+                    has_nvenc = True
+        except Exception:
+            has_nvenc = False
+
+    if has_nvenc:
+        log("ACCEL", "🚀 Active GPU detected! Utilizing NVENC hardware acceleration.")
+        _HW_ACCEL_CONFIG = {
+            "mode": "nvenc",
+            "video_args_1080p": ["-c:v", "h264_nvenc", "-preset", "p4", "-cq", "23", "-spatial-aq", "1"],
+            "video_args_720p": ["-c:v", "h264_nvenc", "-preset", "p4", "-cq", "24"],
+            "description": "NVIDIA NVENC Hardware Acceleration"
+        }
+    else:
+        log("ACCEL", "⚙️ CPU environment detected. Utilizing multi-threaded libx264 (all cores).")
+        _HW_ACCEL_CONFIG = {
+            "mode": "cpu",
+            "video_args_1080p": ["-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-threads", "0"],
+            "video_args_720p": ["-c:v", "libx264", "-preset", "veryfast", "-crf", "24", "-threads", "0"],
+            "description": "Multi-threaded CPU (libx264, all cores)"
+        }
+
+    return _HW_ACCEL_CONFIG
+
 def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
     """
-    Burn Arabic subtitles directly into video frames (hardsubbing) using FFmpeg.
-    Enforces clean UTF-8 encoding (prioritizing windows-1256/cp1256 conversion before latin1),
-    sanitizes paths, executes FFmpeg from a flat staging directory, and dynamically controls
-    bitrate with NVENC p6/cq20-22 to strictly cap output under 4200 MB for all movie lengths.
+    Burn Arabic subtitles directly into 1080p video frames (hardsubbing) using FFmpeg.
+    Auto-detects and leverages NVIDIA NVENC hardware acceleration when a GPU is present,
+    dynamically falling back to multi-threaded CPU libx264 (all cores) on CPU runtimes.
+    Maintains -y, -nostdin, and direct log redirection to prevent OS pipe deadlocks.
     """
     if not video_path or not os.path.exists(video_path):
         log("HARDSUB", "Video path is invalid or missing.")
@@ -1506,20 +1579,20 @@ def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
         try: os.remove(staged_output)
         except Exception: pass
 
-    # 1080p Hardsubbing: 4-Core CPU libx264, preset veryfast, crf 23, copy audio
+    # Hardware acceleration detection & encoder argument resolution
+    accel = detect_hardware_acceleration()
+    v_args_1080p = accel["video_args_1080p"]
+
     sub_style = "FontSize=20,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=3"
     sub_filter_rel = f"subtitles=sub.srt:force_style='{sub_style}'"
 
     ffmpeg_log = os.path.join(staging_dir, "ffmpeg_process.log")
-    log("HARDSUB", f"Burning Arabic subtitles into 1080p frames (CPU 4 threads, veryfast, crf 23): output_1080p.mp4 in {staging_dir}...")
+    log("HARDSUB", f"Burning Arabic subtitles into 1080p frames ({accel['description']}): output_1080p.mp4 in {staging_dir}...")
     cmd = [
         "ffmpeg", "-y", "-nostdin",
         "-i", ffmpeg_input,
         "-vf", sub_filter_rel,
-        "-c:v", "libx264",
-        "-preset", "veryfast",
-        "-crf", "23",
-        "-threads", "4",
+        *v_args_1080p,
         "-c:a", "copy",
         "output_1080p.mp4"
     ]
@@ -1540,15 +1613,28 @@ def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
             "ffmpeg", "-y", "-nostdin",
             "-i", ffmpeg_input,
             "-vf", sub_filter_abs,
-            "-c:v", "libx264",
-            "-preset", "veryfast",
-            "-crf", "23",
-            "-threads", "4",
+            *v_args_1080p,
             "-c:a", "copy",
             "output_1080p.mp4"
         ]
         with open(ffmpeg_log, "a", encoding="utf-8") as lf:
             proc = subprocess.run(cmd_abs, stdout=lf, stderr=lf, cwd=staging_dir)
+
+        # Dynamic fallback: If NVENC failed, try multi-threaded CPU libx264 as safeguard
+        if proc.returncode != 0 and accel["mode"] == "nvenc":
+            log("HARDSUB", "⚠️ NVENC hardware encode failed; dynamically falling back to multi-threaded CPU libx264...")
+            cpu_args_1080p = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-threads", "0"]
+            cmd_cpu = [
+                "ffmpeg", "-y", "-nostdin",
+                "-i", ffmpeg_input,
+                "-vf", sub_filter_abs,
+                *cpu_args_1080p,
+                "-c:a", "copy",
+                "output_1080p.mp4"
+            ]
+            with open(ffmpeg_log, "a", encoding="utf-8") as lf:
+                proc = subprocess.run(cmd_cpu, stdout=lf, stderr=lf, cwd=staging_dir)
+
         if proc.returncode != 0:
             err_snippet = ""
             try:
@@ -1586,8 +1672,8 @@ def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
 def downscale_to_720p(input_1080p_path: str, output_720p_path: str = None) -> str:
     """
     Subbed Downscaling (720p Generation):
-    Directly downscales 1080p hardsubbed video to 720p using fast scaling:
-    ffmpeg -y -nostdin -i output_1080p.mp4 -vf "scale=-2:720" -c:v libx264 -preset veryfast -crf 24 -threads 4 -c:a copy output_720p.mp4
+    Directly downscales 1080p hardsubbed video to 720p using fast scaling.
+    Dynamically applies GPU (NVENC p4, cq 24) or CPU (libx264 veryfast, crf 24, all cores) acceleration.
     """
     staging_dir = os.path.dirname(input_1080p_path) or ("/content/staging" if os.path.exists("/content") else os.path.abspath("./staging_temp"))
     os.makedirs(staging_dir, exist_ok=True)
@@ -1598,21 +1684,37 @@ def downscale_to_720p(input_1080p_path: str, output_720p_path: str = None) -> st
         try: os.remove(output_720p_path)
         except Exception: pass
 
+    accel = detect_hardware_acceleration()
+    v_args_720p = accel["video_args_720p"]
+
     ffmpeg_log = os.path.join(staging_dir, "ffmpeg_process.log")
-    log("HARDSUB", f"Downscaling to 720p (scale=-2:720, crf 24, 4 threads): {os.path.basename(input_1080p_path)} -> {os.path.basename(output_720p_path)}...")
+    log("HARDSUB", f"Downscaling to 720p (scale=-2:720, {accel['description']}): {os.path.basename(input_1080p_path)} -> {os.path.basename(output_720p_path)}...")
     cmd = [
         "ffmpeg", "-y", "-nostdin",
         "-i", input_1080p_path,
         "-vf", "scale=-2:720",
-        "-c:v", "libx264",
-        "-preset", "veryfast",
-        "-crf", "24",
-        "-threads", "4",
+        *v_args_720p,
         "-c:a", "copy",
         output_720p_path
     ]
     with open(ffmpeg_log, "a", encoding="utf-8") as lf:
         proc = subprocess.run(cmd, stdout=lf, stderr=lf)
+
+    # Dynamic fallback: if NVENC failed, try multi-threaded CPU libx264
+    if proc.returncode != 0 and accel["mode"] == "nvenc":
+        log("HARDSUB", "⚠️ NVENC 720p downscaling failed; dynamically falling back to multi-threaded CPU libx264...")
+        cpu_args_720p = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "24", "-threads", "0"]
+        cmd_cpu = [
+            "ffmpeg", "-y", "-nostdin",
+            "-i", input_1080p_path,
+            "-vf", "scale=-2:720",
+            *cpu_args_720p,
+            "-c:a", "copy",
+            output_720p_path
+        ]
+        with open(ffmpeg_log, "a", encoding="utf-8") as lf:
+            proc = subprocess.run(cmd_cpu, stdout=lf, stderr=lf)
+
     if proc.returncode != 0:
         err_snippet = ""
         try:
@@ -2132,6 +2234,7 @@ def run_pipeline(movie_title: str, release_year: str = None, imdb_id: str = None
     print("=" * 75)
     print("  EGYMAX CLOUD AUTOMATION PIPELINE (OPTIMIZED DUAL-QUALITY ENGINE)")
     print("=" * 75)
+    detect_hardware_acceleration()
 
     parsed = parse_media_item(movie_title)
     is_episode = parsed.get("is_episode", False)
