@@ -1438,15 +1438,16 @@ def detect_hardware_acceleration(force_refresh: bool = False) -> dict:
     1. Checks if an NVIDIA GPU is present and FFmpeg supports 'h264_nvenc'.
     2. If NVENC is available:
        - Mode: 'nvenc'
-       - 1080p Video Args: ["-c:v", "h264_nvenc", "-preset", "p4", "-cq", "23", "-spatial-aq", "1"]
-       - 720p Downscale Args: ["-c:v", "h264_nvenc", "-preset", "p4", "-cq", "24"]
+       - 1080p Video Args: ["-c:v", "h264_nvenc", "-pix_fmt", "yuv420p", "-preset", "p4", "-cq", "23", "-spatial-aq", "1"]
+       - 720p Downscale Args: ["-c:v", "h264_nvenc", "-pix_fmt", "yuv420p", "-preset", "p4", "-cq", "24"]
        - Log: [ACCEL] 🚀 Active GPU detected! Utilizing NVENC hardware acceleration.
     3. If NO GPU / NVENC unavailable (Lightning AI, standard VPS, local CPU machine):
        - Mode: 'cpu'
-       - 1080p Video Args: ["-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-threads", "0"]
-       - 720p Downscale Args: ["-c:v", "libx264", "-preset", "veryfast", "-crf", "24", "-threads", "0"]
+       - 1080p Video Args: ["-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "veryfast", "-crf", "23", "-threads", "0"]
+       - 720p Downscale Args: ["-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "veryfast", "-crf", "24", "-threads", "0"]
        - Note: Uses -threads 0 so FFmpeg dynamically uses all available CPU cores regardless of system specs.
        - Log: [ACCEL] ⚙️ CPU environment detected. Utilizing multi-threaded libx264 (all cores).
+    Note: -pix_fmt yuv420p explicitly converts 10-bit sources (e.g. x265/HEVC 10-bit) into 8-bit YUV for universal NVENC/web compatibility.
     Caches the configuration for subsequent calls unless force_refresh=True.
     """
     global _HW_ACCEL_CONFIG
@@ -1471,6 +1472,7 @@ def detect_hardware_acceleration(force_refresh: bool = False) -> dict:
                     ffmpeg_bin, "-y", "-nostdin",
                     "-f", "lavfi", "-i", "color=c=black:s=256x256:d=0.1",
                     "-c:v", "h264_nvenc",
+                    "-pix_fmt", "yuv420p",
                     "-f", "null", "-"
                 ]
                 test_proc = subprocess.run(
@@ -1488,16 +1490,16 @@ def detect_hardware_acceleration(force_refresh: bool = False) -> dict:
         log("ACCEL", "🚀 Active GPU detected! Utilizing NVENC hardware acceleration.")
         _HW_ACCEL_CONFIG = {
             "mode": "nvenc",
-            "video_args_1080p": ["-c:v", "h264_nvenc", "-preset", "p4", "-cq", "23", "-spatial-aq", "1"],
-            "video_args_720p": ["-c:v", "h264_nvenc", "-preset", "p4", "-cq", "24"],
+            "video_args_1080p": ["-c:v", "h264_nvenc", "-pix_fmt", "yuv420p", "-preset", "p4", "-cq", "23", "-spatial-aq", "1"],
+            "video_args_720p": ["-c:v", "h264_nvenc", "-pix_fmt", "yuv420p", "-preset", "p4", "-cq", "24"],
             "description": "NVIDIA NVENC Hardware Acceleration"
         }
     else:
         log("ACCEL", "⚙️ CPU environment detected. Utilizing multi-threaded libx264 (all cores).")
         _HW_ACCEL_CONFIG = {
             "mode": "cpu",
-            "video_args_1080p": ["-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-threads", "0"],
-            "video_args_720p": ["-c:v", "libx264", "-preset", "veryfast", "-crf", "24", "-threads", "0"],
+            "video_args_1080p": ["-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "veryfast", "-crf", "23", "-threads", "0"],
+            "video_args_720p": ["-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "veryfast", "-crf", "24", "-threads", "0"],
             "description": "Multi-threaded CPU (libx264, all cores)"
         }
 
@@ -1623,7 +1625,7 @@ def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
         # Dynamic fallback: If NVENC failed, try multi-threaded CPU libx264 as safeguard
         if proc.returncode != 0 and accel["mode"] == "nvenc":
             log("HARDSUB", "⚠️ NVENC hardware encode failed; dynamically falling back to multi-threaded CPU libx264...")
-            cpu_args_1080p = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-threads", "0"]
+            cpu_args_1080p = ["-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "veryfast", "-crf", "23", "-threads", "0"]
             cmd_cpu = [
                 "ffmpeg", "-y", "-nostdin",
                 "-i", ffmpeg_input,
@@ -1703,7 +1705,7 @@ def downscale_to_720p(input_1080p_path: str, output_720p_path: str = None) -> st
     # Dynamic fallback: if NVENC failed, try multi-threaded CPU libx264
     if proc.returncode != 0 and accel["mode"] == "nvenc":
         log("HARDSUB", "⚠️ NVENC 720p downscaling failed; dynamically falling back to multi-threaded CPU libx264...")
-        cpu_args_720p = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "24", "-threads", "0"]
+        cpu_args_720p = ["-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "veryfast", "-crf", "24", "-threads", "0"]
         cmd_cpu = [
             "ffmpeg", "-y", "-nostdin",
             "-i", input_1080p_path,
