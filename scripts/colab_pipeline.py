@@ -25,6 +25,12 @@ from urllib.parse import quote, quote_plus
 from requests.auth import HTTPBasicAuth
 from bs4 import BeautifulSoup
 
+if sys.stdout and hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 # Optional progress-tracked multipart upload
 try:
     from requests_toolbelt import MultipartEncoder, MultipartEncoderMonitor
@@ -515,26 +521,48 @@ def fetch_tv_metadata(show_name: str, season_num: int = 1, episode_num: int = 1,
         "imdb_id": extracted_imdb_id,
     }
 
-def matches_show_tokens(show_name: str, title: str) -> bool:
+def matches_show_tokens(show_name: str, title: str, season_num: int = None, episode_num: int = None) -> bool:
+    r"""
+    Enforce strict boundary matching on candidate torrent titles:
+    - Normalizes show title (lowercased, punctuation stripped as a whole phrase with [\s._\-]+).
+    - Rejects candidates where extraneous unbracketed words precede the title (e.g. rejecting 'The Bad Guys Breaking In' or 'Better Call Saul Breaking Bad').
+    - If season_num and episode_num are provided, ensures season/episode pattern follows the show name.
     """
-    Enforce exact token and phrase matching for show_name against torrent title
-    to prevent false matches (e.g., rejecting "Breaking Brad" and "The Bad Guys Breaking In" when looking for "Breaking Bad").
-    """
+    if not show_name or not title:
+        return False
+
     norm_show = re.sub(r"['’]", "", show_name).lower()
-    norm_show = re.sub(r'[^\w\s]', ' ', norm_show)
-    show_words = [re.escape(w) for w in norm_show.split() if w]
-    if not show_words:
-        return True
-    show_phrase = r'\s+'.join(show_words)
-    
+    norm_show = re.sub(r"[^\w\s]", " ", norm_show)
+    words = [re.escape(w) for w in norm_show.split() if w]
+    if not words:
+        return False
+    show_phrase = r"[\s\._\-]+".join(words)
+
     norm_title = re.sub(r"['’]", "", title).lower()
-    clean_title = re.sub(r'[._\-]', ' ', norm_title)
-    
-    # 1. Exact phrase sequence check
-    if re.search(rf"\b{show_phrase}\b", clean_title):
-        return True
-    # 2. Whole-word token check
-    return all(re.search(rf"\b{tok}\b", clean_title) for tok in show_words)
+
+    # 1. Exact show phrase boundary check
+    pattern = rf"(?:^|[\s\._\-])({show_phrase})(?=$|[\s\._\-])"
+    m = re.search(pattern, norm_title)
+    if not m:
+        return False
+
+    # 2. Reject if unbracketed words precede the show title
+    prefix = norm_title[:m.start(1)]
+    clean_prefix = re.sub(r"\[.*?\]|\(.*?\)|<.*?>|\{.*?\}", " ", prefix)
+    clean_prefix = re.sub(r"(?:https?://)?(?:www\.)?[\w-]+\.[a-z0-9.-]+\b", " ", clean_prefix, flags=re.I)
+    clean_prefix = re.sub(r"[^\w]", " ", clean_prefix).strip()
+    if clean_prefix:
+        return False
+
+    # 3. If season and episode are specified, ensure the season/episode pattern follows
+    if season_num is not None and episode_num is not None:
+        after_show = norm_title[m.end(1):]
+        clean_after = re.sub(r"[\s\._\-]+", " ", after_show)
+        ep_pattern = rf"\b(?:s0*{season_num}\s*e0*{episode_num}|0*{season_num}\s*x\s*0*{episode_num})\b"
+        if not re.search(ep_pattern, clean_after, re.IGNORECASE):
+            return False
+
+    return True
 
 def fetch_tv_torrent(show_name: str, season_num: int, episode_num: int, imdb_id: str = None, preferred_quality: str = "1080p") -> dict:
     """
@@ -542,9 +570,9 @@ def fetch_tv_torrent(show_name: str, season_num: int, episode_num: int, imdb_id:
     1. Primary Swarm Indexer: APIBay (The Pirate Bay API - open, fast, no Cloudflare/Colab blocks).
     2. Secondary Swarm Indexer: EZTV API across active mirrors.
     3. Tertiary Swarm Indexer: Torrentio public stream provider.
-    - Exact token & phrase validation prevents false matches.
+    - Strict boundary phrase & season/episode validation prevents false matches.
     - Enforces seeds > 0 (filters out dead swarms).
-    - Sorts matching releases by quality (1080p -> 720p) and active seeds count descending.
+    - Returns sorted candidate list (1080p -> 720p, descending by seeds count) for resilient download fallback.
     """
     episode_tag = f"S{season_num:02d}E{episode_num:02d}"
     log("TV", f"Searching TV torrent swarms for {show_name} {episode_tag} (IMDb: {imdb_id or 'N/A'})...")
@@ -576,9 +604,7 @@ def fetch_tv_torrent(show_name: str, season_num: int, episode_num: int, imdb_id:
                     info_hash = item.get("info_hash", "")
                     if not info_hash or info_hash == "0000000000000000000000000000000000000000" or name == "No results returned":
                         continue
-                    if not matches_show_tokens(show_name, name):
-                        continue
-                    if not re.search(rf"\bS0*{season_num}E0*{episode_num}\b", name, re.IGNORECASE):
+                    if not matches_show_tokens(show_name, name, season_num, episode_num):
                         continue
                     seeds = int(item.get("seeders") or 0)
                     if seeds <= 0:
@@ -617,21 +643,18 @@ def fetch_tv_torrent(show_name: str, season_num: int, episode_num: int, imdb_id:
                             break
                         for t in torrents:
                             t_title = t.get("title", "")
-                            if not matches_show_tokens(show_name, t_title):
+                            if not matches_show_tokens(show_name, t_title, season_num, episode_num):
                                 continue
-                            t_season = int(t.get("season") or 0)
-                            t_episode = int(t.get("episode") or 0)
-                            if (t_season == season_num and t_episode == episode_num) or re.search(rf"\bS0*{season_num}E0*{episode_num}\b", t_title, re.IGNORECASE):
-                                s_count = int(t.get("seeds") or 0)
-                                if s_count > 0:
-                                    matched_torrents.append({
-                                        "title": t_title,
-                                        "torrent_url": t.get("torrent_url"),
-                                        "magnet_uri": t.get("magnet_url"),
-                                        "seeds": s_count,
-                                        "size_bytes": t.get("size_bytes") or 0,
-                                        "source": "EZTV"
-                                    })
+                            s_count = int(t.get("seeds") or 0)
+                            if s_count > 0:
+                                matched_torrents.append({
+                                    "title": t_title,
+                                    "torrent_url": t.get("torrent_url"),
+                                    "magnet_uri": t.get("magnet_url"),
+                                    "seeds": s_count,
+                                    "size_bytes": t.get("size_bytes") or 0,
+                                    "source": "EZTV"
+                                })
                         if matched_torrents:
                             log("TV", f"EZTV ({mirror}) resolved {len(matched_torrents)} releases for {episode_tag}")
                             break
@@ -650,7 +673,7 @@ def fetch_tv_torrent(show_name: str, season_num: int, episode_num: int, imdb_id:
                     raw_title = s.get("title", "")
                     lines = [l.strip() for l in raw_title.split("\n") if l.strip()]
                     rel_title = lines[0] if lines else s.get("name", "")
-                    if not matches_show_tokens(show_name, rel_title):
+                    if not matches_show_tokens(show_name, rel_title, season_num, episode_num):
                         continue
                     seeds_match = re.search(r'[👤👥]\s*([0-9]+)', raw_title) or re.search(r'([0-9]+)\s*[💾]', raw_title)
                     s_seeds = int(seeds_match.group(1)) if seeds_match else 0
@@ -690,24 +713,30 @@ def fetch_tv_torrent(show_name: str, season_num: int, episode_num: int, imdb_id:
         return 1 if is_1080 else (2 if is_720 else 3)
 
     valid_torrents.sort(key=lambda t: (quality_tier(t), -t["seeds"]))
-    selected_torrent = valid_torrents[0]
 
-    actual_quality = "1080p" if "1080" in selected_torrent.get("title", "").lower() else ("720p" if "720" in selected_torrent.get("title", "").lower() else "HDTV")
-    magnet_uri = selected_torrent.get("magnet_uri")
-    torrent_url = selected_torrent.get("torrent_url")
+    top_candidates = []
+    for vt in valid_torrents:
+        q = "1080p" if "1080" in vt.get("title", "").lower() else ("720p" if "720" in vt.get("title", "").lower() else "HDTV")
+        top_candidates.append({
+            "title": vt.get("title"),
+            "quality": q,
+            "torrent_url": vt.get("torrent_url"),
+            "magnet_uri": vt.get("magnet_uri"),
+            "seeds": vt.get("seeds", 0),
+            "size_bytes": vt.get("size_bytes", 0),
+            "source": vt.get("source", "Unknown")
+        })
 
-    log("TV", f"Selected release: '{selected_torrent.get('title')}' ({actual_quality}, seeds: {selected_torrent.get('seeds')}, source: {selected_torrent.get('source')})")
-    return {
-        "title": selected_torrent.get("title"),
-        "quality": actual_quality,
-        "torrent_url": torrent_url,
-        "magnet_uri": magnet_uri,
-        "seeds": selected_torrent.get("seeds", 0),
-        "size_bytes": selected_torrent.get("size_bytes", 0)
-    }
+    selected_torrent = top_candidates[0]
+    log("TV", f"Selected release: '{selected_torrent.get('title')}' ({selected_torrent['quality']}, seeds: {selected_torrent.get('seeds')}, source: {selected_torrent.get('source')})")
 
-# Backward compatibility alias
+    result = selected_torrent.copy()
+    result["candidates"] = top_candidates
+    return result
+
+# Aliases for unified resolution
 fetch_eztv_torrent = fetch_tv_torrent
+search_torrent_for_tv_episode = fetch_tv_torrent
 
 # =============================================================================
 # 2. TORRENT ACQUISITION (YTS API FOR MOVIES)
@@ -870,7 +899,8 @@ def download_with_aria2(torrent_source: str, download_dir: str = DOWNLOAD_DIR, s
         "--auto-file-renaming=false",
         "--conditional-get=true",
         "--file-allocation=none",
-        "--bt-stop-timeout=120",
+        "--bt-stop-timeout=90",
+        "--disable-ipv6=true",
         "--bt-tracker-connect-timeout=10",
         torrent_source
     ]
@@ -2314,14 +2344,32 @@ def run_pipeline(movie_title: str, release_year: str = None, imdb_id: str = None
         meta["episode_number"] = parsed["episode_number"]
         meta["episode_tag"] = parsed["episode_tag"]
 
-        # 2. Fetch 1080p EZTV Torrent Source
+        # 2. Fetch TV Torrent Source candidates
         target_imdb = meta.get("imdb_id") or target_imdb
         fetch_quality = "1080p" if preferred_quality in ("both", "multi", "all") else preferred_quality
-        torrent_info = fetch_eztv_torrent(parsed["show_name"], parsed["season_number"], parsed["episode_number"], target_imdb, fetch_quality)
+        torrent_info = fetch_tv_torrent(parsed["show_name"], parsed["season_number"], parsed["episode_number"], target_imdb, fetch_quality)
+        candidates = torrent_info.get("candidates") or [torrent_info]
 
-        # 3. High-Speed aria2c Download
-        download_source = torrent_info["torrent_url"] or torrent_info["magnet_uri"]
-        raw_video_path = download_with_aria2(download_source)
+        # 3. High-Speed aria2c Download with Candidate Fallback Loop (up to 3 tries)
+        raw_video_path = None
+        max_tries = min(3, len(candidates))
+        for cand_idx in range(max_tries):
+            candidate = candidates[cand_idx]
+            download_source = candidate.get("torrent_url") or candidate.get("magnet_uri")
+            cand_title = candidate.get("title", "Unknown")
+            cand_seeds = candidate.get("seeds", 0)
+            log("PIPELINE", f"Attempting download candidate {cand_idx + 1}/{max_tries}: '{cand_title}' ({cand_seeds} seeds)...")
+            try:
+                raw_video_path = download_with_aria2(download_source, DOWNLOAD_DIR, STAGING_DIR)
+                if raw_video_path and os.path.exists(raw_video_path):
+                    log("PIPELINE", f"✅ Successfully downloaded video candidate {cand_idx + 1}: {os.path.basename(raw_video_path)}")
+                    break
+            except Exception as e:
+                log("PIPELINE", f"⚠️ Torrent download failed, trying next candidate release... (Candidate {cand_idx + 1} error: {e})")
+                sanitize_download_dir(DOWNLOAD_DIR, STAGING_DIR)
+
+        if not raw_video_path or not os.path.exists(raw_video_path):
+            raise RuntimeError(f"All {max_tries} torrent candidates failed to download for TV episode '{parsed['show_name']} {parsed['episode_tag']}'.")
 
         # 4. Fetch Arabic Subtitles (.srt) targeting exact Season & Episode
         arabic_srt_path = download_subtitles_for_tv_episode(target_imdb, parsed["season_number"], parsed["episode_number"], DOWNLOAD_DIR)
