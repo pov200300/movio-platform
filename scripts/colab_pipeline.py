@@ -1216,8 +1216,8 @@ def apply_ass_style(ass_text: str) -> str:
         return ""
 
     target_style = (
-        "Style: Default,Noto Sans Arabic,80,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,"
-        "1,0,0,0,100,100,0,0,1,3.2,1,2,20,20,45,1"
+        "Style: Default,Noto Kufi Arabic,72,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,"
+        "1,0,0,0,100,100,0,0,1,1.8,1.0,2,20,20,32,1"
     )
 
     # 1. Update or inject PlayResX, PlayResY, ScaledBorderAndShadow under [Script Info]
@@ -1295,7 +1295,7 @@ def convert_srt_to_ass(srt_text: str, srt_path: str = None) -> str:
         "",
         "[V4+ Styles]",
         "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
-        "Style: Default,Noto Sans Arabic,80,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,1,0,0,0,100,100,0,0,1,3.2,1,2,20,20,45,1",
+        "Style: Default,Noto Kufi Arabic,72,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,1,0,0,0,100,100,0,0,1,1.8,1.0,2,20,20,32,1",
         "",
         "[Events]",
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
@@ -1585,7 +1585,7 @@ def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
     accel = detect_hardware_acceleration()
     v_args_1080p = accel["video_args_1080p"]
 
-    sub_style = "FontSize=20,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=3"
+    sub_style = "FontName=Noto Kufi Arabic,FontSize=21,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=1.8,Shadow=1.0,MarginV=32,Alignment=2"
     sub_filter_rel = f"subtitles=sub.srt:force_style='{sub_style}'"
 
     ffmpeg_log = os.path.join(staging_dir, "ffmpeg_process.log")
