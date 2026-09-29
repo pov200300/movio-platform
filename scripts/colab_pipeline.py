@@ -72,6 +72,31 @@ STREAMTAPE_API_BASE = "https://api.streamtape.com"
 
 DOWNLOAD_DIR = "/content/download" if os.path.exists("/content") else os.path.abspath("./downloads")
 STAGING_DIR = "/content/staging" if os.path.exists("/content") else os.path.abspath("./staging_temp")
+FONTS_DIR = "/content/fonts" if os.path.exists("/content") else os.path.abspath("./fonts")
+
+def setup_arabic_fonts(fonts_dir: str = FONTS_DIR) -> str:
+    """
+    Direct Arabic font provisioning: ensures NotoSansArabic-Bold.ttf exists in fonts_dir.
+    In local or offline testing environments, falls back gracefully without raising exceptions.
+    """
+    try:
+        os.makedirs(fonts_dir, exist_ok=True)
+        font_file = os.path.join(fonts_dir, "NotoSansArabic-Bold.ttf")
+        if not os.path.exists(font_file) or os.path.getsize(font_file) == 0:
+            url = "https://github.com/googlefonts/noto-fonts/raw/main/hinted/ttf/NotoSansArabic/NotoSansArabic-Bold.ttf"
+            log("FONTS", f"Downloading Noto Sans Arabic font to {font_file}...")
+            r = requests.get(url, timeout=10)
+            if r.status_code == 200 and len(r.content) > 1000:
+                with open(font_file, "wb") as f:
+                    f.write(r.content)
+                log("FONTS", f"✅ Noto Sans Arabic font downloaded -> {font_file}")
+                fc_bin = shutil.which("fc-cache")
+                if fc_bin:
+                    subprocess.run([fc_bin, "-fv", fonts_dir], capture_output=True)
+        return fonts_dir
+    except Exception as e:
+        log("FONTS", f"Notice on Arabic font setup (offline/fallback mode): {e}")
+        return fonts_dir
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -1237,7 +1262,7 @@ def apply_ass_style(ass_text: str) -> str:
         return ""
 
     target_style = (
-        "Style: Default,Noto Kufi Arabic,72,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,"
+        "Style: Default,Noto Sans Arabic,72,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,"
         "1,0,0,0,100,100,0,0,1,1.8,1.0,2,20,20,32,1"
     )
 
@@ -1316,7 +1341,7 @@ def convert_srt_to_ass(srt_text: str, srt_path: str = None) -> str:
         "",
         "[V4+ Styles]",
         "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
-        "Style: Default,Noto Kufi Arabic,72,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,1,0,0,0,100,100,0,0,1,1.8,1.0,2,20,20,32,1",
+        "Style: Default,Noto Sans Arabic,72,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,1,0,0,0,100,100,0,0,1,1.8,1.0,2,20,20,32,1",
         "",
         "[Events]",
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
@@ -1621,8 +1646,9 @@ def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
     accel = detect_hardware_acceleration()
     v_args_1080p = accel["video_args_1080p"]
 
-    sub_style = "FontName=Noto Kufi Arabic,Noto Sans Arabic,FontSize=21,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=1.8,Shadow=1.0,MarginV=32,Alignment=2"
-    sub_filter_rel = f"subtitles=sub.srt:force_style='{sub_style}'"
+    fonts_dir_opt = ":fontsdir='/content/fonts'" if os.path.exists("/content/fonts") else ""
+    sub_style = "FontName=Noto Sans Arabic,FontSize=22,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=1.8,Shadow=1.0,MarginV=32,Alignment=2"
+    sub_filter_rel = f"subtitles='sub.srt'{fonts_dir_opt}:force_style='{sub_style}'"
 
     ffmpeg_log = os.path.join(staging_dir, "ffmpeg_process.log")
     log("HARDSUB", f"Burning Arabic subtitles into 1080p frames ({accel['description']}): output_1080p.mp4 in {staging_dir}...")
@@ -1646,7 +1672,7 @@ def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
             pass
         log("HARDSUB", f"Notice on relative subtitle filter ({proc.returncode}): {err_snippet}. Retrying with escaped absolute subtitle path...")
         sub_abs_escaped = os.path.abspath(staged_clean_srt).replace("\\", "/").replace(":", r"\:")
-        sub_filter_abs = f"subtitles='{sub_abs_escaped}':force_style='{sub_style}'"
+        sub_filter_abs = f"subtitles='{sub_abs_escaped}'{fonts_dir_opt}:force_style='{sub_style}'"
         cmd_abs = [
             "ffmpeg", "-y", "-nostdin",
             "-i", ffmpeg_input,

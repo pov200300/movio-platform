@@ -38,6 +38,7 @@ downloads/
 download/
 staging/
 staging_temp/
+fonts/
 /content/
 *.mp4
 *.mkv
