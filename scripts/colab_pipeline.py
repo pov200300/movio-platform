@@ -909,9 +909,36 @@ def decode_arabic_subtitle_bytes(raw_bytes: bytes) -> str:
         return raw_bytes.decode('utf-8', errors='replace')
 
 
+def fix_arabic_mojibake(text: str) -> str:
+    """
+    Auto-repair Arabic text that suffered double-encoding or mojibake
+    (e.g., CP1256 bytes decoded as CP1252 / Latin-1).
+    """
+    if not text:
+        return text
+    arabic_chars = len(re.findall(r'[\u0600-\u06FF]', text))
+    total_alpha = len(re.findall(r'[A-Za-z\u0600-\u06FF]', text))
+
+    # If already predominantly Arabic, return as-is
+    if total_alpha > 0 and (arabic_chars / total_alpha) > 0.4:
+        return text
+
+    # Attempt to repair text that was decoded as Latin-1/cp1252 instead of CP1256
+    for enc in ['cp1252', 'latin1', 'iso-8859-1']:
+        try:
+            raw = text.encode(enc)
+            repaired = raw.decode('cp1256')
+            repaired_arabic = len(re.findall(r'[\u0600-\u06FF]', repaired))
+            if repaired_arabic > arabic_chars and repaired_arabic >= 20:
+                return repaired
+        except Exception:
+            continue
+    return text
+
+
 def decode_arabic_subtitle(raw_bytes: bytes) -> tuple:
     """
-    Backwards-compatible wrapper returning (clean_text, detected_enc) using decode_arabic_subtitle_bytes.
+    Backwards-compatible wrapper returning (clean_text, detected_enc) using decode_arabic_subtitle_bytes and fix_arabic_mojibake.
     """
     if not raw_bytes:
         return None, None
@@ -922,22 +949,24 @@ def decode_arabic_subtitle(raw_bytes: bytes) -> tuple:
         try:
             text = raw_bytes.decode(enc)
             if re.search(r'[\u0600-\u06FF]', text):
-                clean_text = text.lstrip("\ufeff").replace("\r\n", "\n").replace("\r", "\n")
+                clean_text = fix_arabic_mojibake(text.lstrip("\ufeff").replace("\r\n", "\n").replace("\r", "\n"))
                 return clean_text, enc
         except (UnicodeDecodeError, LookupError):
             continue
 
     fallback = decode_arabic_subtitle_bytes(raw_bytes)
-    if fallback and re.search(r'[\u0600-\u06FF]', fallback):
-        clean_text = fallback.lstrip("\ufeff").replace("\r\n", "\n").replace("\r", "\n")
-        return clean_text, "cp1256"
+    if fallback:
+        clean_text = fix_arabic_mojibake(fallback.lstrip("\ufeff").replace("\r\n", "\n").replace("\r", "\n"))
+        if re.search(r'[\u0600-\u06FF]', clean_text):
+            return clean_text, "cp1256"
 
     return None, None
 
 
 def read_subtitle_file_robustly(file_path: str) -> str:
     """
-    Read subtitle file as binary bytes and decode using robust Arabic-aware decoder.
+    Read subtitle file as binary bytes, decode using robust Arabic-aware decoder,
+    and apply fix_arabic_mojibake auto-repair.
     """
     if not file_path or not os.path.exists(file_path):
         return ""
@@ -945,7 +974,8 @@ def read_subtitle_file_robustly(file_path: str) -> str:
     with open(file_path, "rb") as f:
         raw_bytes = f.read()
 
-    return decode_arabic_subtitle_bytes(raw_bytes)
+    decoded = decode_arabic_subtitle_bytes(raw_bytes)
+    return fix_arabic_mojibake(decoded)
 
 # =============================================================================
 # 4. ARABIC-ONLY SUBTITLES & FFMPEG HARDSUBBING (BURN-IN)
@@ -968,7 +998,7 @@ def download_subtitles_for_imdb(imdb_id: str, output_dir: str = DOWNLOAD_DIR) ->
     }
 
     log("SUBS", f"Searching highest-rated Arabic subtitle for IMDb ID '{imdb_id}'...")
-    arabic_sub_url = None
+    arabic_sub_urls = []
 
     # 1. Try JSON endpoint first
     try:
@@ -979,14 +1009,17 @@ def download_subtitles_for_imdb(imdb_id: str, output_dir: str = DOWNLOAD_DIR) ->
             arabic_subs = data.get("arabic", [])
             if arabic_subs:
                 sorted_subs = sorted(arabic_subs, key=lambda x: x.get("rating", 0), reverse=True)
-                arabic_sub_url = sorted_subs[0].get("url")
-                if arabic_sub_url:
-                    log("SUBS", f"Found Arabic subtitle via JSON API (Rating: {sorted_subs[0].get('rating', 'N/A')})")
+                for s in sorted_subs:
+                    u = s.get("url")
+                    if u and u not in arabic_sub_urls:
+                        arabic_sub_urls.append(u)
+                if arabic_sub_urls:
+                    log("SUBS", f"Found {len(arabic_sub_urls)} Arabic subtitle candidates via JSON API.")
     except Exception as e:
         log("SUBS", f"JSON API notice: {e}")
 
     # 2. Resilient fallback to HTML scraping across mirror domains
-    if not arabic_sub_url:
+    if not arabic_sub_urls:
         mirrors = [
             f"https://yifysubtitles.ch/movie-imdb/{imdb_id}",
             f"https://yts-subs.com/movie-imdb/{imdb_id}",
@@ -1010,76 +1043,66 @@ def download_subtitles_for_imdb(imdb_id: str, output_dir: str = DOWNLOAD_DIR) ->
                         # Strictly match Arabic rows - NEVER fall back to top/first row
                         if lang_text == "arabic" or "arabic" in lang_text:
                             link = tr.find("a", href=True)
-                            if link and "/subtitles/" in link["href"]:
-                                arabic_sub_url = link["href"]
-                                log("SUBS", f"Found Arabic subtitle on mirror: {mirror_url}")
-                                break
-                    if arabic_sub_url:
+                            if link and "/subtitles/" in link["href"] and link["href"] not in arabic_sub_urls:
+                                arabic_sub_urls.append(link["href"])
+                    if arabic_sub_urls:
+                        log("SUBS", f"Found {len(arabic_sub_urls)} Arabic subtitle candidates on mirror: {mirror_url}")
                         break
             except Exception:
                 continue
 
-    if not arabic_sub_url:
+    if not arabic_sub_urls:
         log("SUBS", f"No Arabic subtitles found for IMDb ID {imdb_id}.")
         return None
 
-    # 3. Download .zip archive and extract Arabic .srt with anti-bot check and mirror resilience
-    slug = arabic_sub_url.rstrip("/").split("/")[-1]
+    # 3. Candidate validation loop across candidate URLs & zip archives
     zip_mirrors = [
         "https://yifysubtitles.ch",
         "https://yts-subs.com",
         "https://yifysubtitles.org"
     ]
 
-    for zip_base in zip_mirrors:
-        zip_url = f"{zip_base}/subtitle/{slug}.zip"
-        page_referer = f"{zip_base}/subtitles/{slug}"
-        req_headers = {
-            "User-Agent": headers["User-Agent"],
-            "Referer": page_referer
-        }
-        try:
-            zr = requests.get(zip_url, headers=req_headers, timeout=15)
-            if zr.status_code == 200:
+    for sub_idx, sub_url in enumerate(arabic_sub_urls, start=1):
+        slug = sub_url.rstrip("/").split("/")[-1]
+        for zip_base in zip_mirrors:
+            zip_url = f"{zip_base}/subtitle/{slug}.zip"
+            page_referer = f"{zip_base}/subtitles/{slug}"
+            req_headers = {
+                "User-Agent": headers["User-Agent"],
+                "Referer": page_referer
+            }
+            try:
+                zr = requests.get(zip_url, headers=req_headers, timeout=15)
+                if zr.status_code != 200:
+                    continue
                 raw_data = zr.content.strip()
                 # Inspect downloaded content: check if an HTML error / anti-bot page was returned
                 if raw_data.lower().startswith(b"<!doctype html") or raw_data.lower().startswith(b"<html") or b"<body" in raw_data[:500].lower():
-                    log("SUBS", f"⚠️ Mirror {zip_base} returned HTML anti-bot/error page instead of ZIP. Trying next mirror...")
                     continue
 
                 with zipfile.ZipFile(io.BytesIO(zr.content)) as z:
                     srt_files = [f for f in z.namelist() if f.lower().endswith(".srt") and not f.startswith("__MACOSX")]
                     if not srt_files:
-                        log("SUBS", f"No .srt files found in archive from {zip_base}.")
                         continue
-
-                    selected_text = None
-                    target_filename = None
 
                     # Prioritize .srt files matching *ara* or *arabic* in their filename
                     sorted_files = sorted(srt_files, key=lambda x: 0 if ("arabic" in x.lower() or "ara" in x.lower()) else 1)
                     for fname in sorted_files:
                         f_bytes = z.read(fname)
-                        decoded_text = decode_arabic_subtitle_bytes(f_bytes)
-                        if decoded_text and re.search(r'[\u0600-\u06FF]', decoded_text):
-                            selected_text = decoded_text
-                            target_filename = fname
-                            break
-
-                    if not selected_text:
-                        log("SUBS", f"None of the subtitle files in {slug}.zip contain Arabic characters across tested encodings.")
-                        continue
-
-                    out_srt = os.path.join(subs_dir, f"{imdb_id}_ara.srt")
-                    with open(out_srt, "w", encoding="utf-8", newline="\n") as sf:
-                        sf.write(selected_text)
-
-                    log("SUBS", f"ℹ️ Subtitle decoded using robust Arabic decoder and re-encoded to clean UTF-8.")
-                    log("SUBS", f"✅ Extracted and verified Arabic subtitle -> {os.path.basename(out_srt)}")
-                    return out_srt
-        except Exception as e:
-            log("SUBS", f"Mirror {zip_base} notice: {e}")
-            continue
+                        raw_text = decode_arabic_subtitle_bytes(f_bytes)
+                        clean_text = fix_arabic_mojibake(raw_text)
+                        ar_count = len(re.findall(r'[\u0600-\u06FF]', clean_text))
+                        if ar_count >= 30:
+                            out_srt = os.path.join(subs_dir, f"{imdb_id}_ara.srt")
+                            with open(out_srt, "w", encoding="utf-8", newline="\n") as sf:
+                                sf.write(clean_text)
+                            log("SUBS", f"✅ Movie Subtitle candidate {sub_idx}/{len(arabic_sub_urls)} ({fname}) verified ({ar_count} Arabic chars) and saved -> {os.path.basename(out_srt)}")
+                            return out_srt
+                        else:
+                            log("SUBS", f"⚠️ Candidate subtitle {sub_idx}/{len(arabic_sub_urls)} ({fname}) failed validation ({ar_count} Arabic chars), trying next available subtitle...")
+            except Exception as e:
+                log("SUBS", f"Mirror {zip_base} notice on candidate {sub_idx}: {e}")
+                continue
 
     log("SUBS", f"Failed downloading or verifying Arabic subtitle for {imdb_id}.")
     return None
@@ -1087,7 +1110,7 @@ def download_subtitles_for_imdb(imdb_id: str, output_dir: str = DOWNLOAD_DIR) ->
 def download_subtitles_for_tv_episode(imdb_id: str, season_num: int, episode_num: int, output_dir: str = DOWNLOAD_DIR) -> str:
     """
     Search and download Arabic subtitles precisely targeted to the TV Show's Season and Episode.
-    Uses OpenSubtitles v3 public series endpoint with fallback to general subtitle search.
+    Uses OpenSubtitles v3 public series endpoint with candidate validation and fallback loop.
     """
     if not imdb_id:
         log("SUBS", "No IMDb ID available for TV episode subtitle search.")
@@ -1107,20 +1130,28 @@ def download_subtitles_for_tv_episode(imdb_id: str, season_num: int, episode_num
             subs = r.json().get("subtitles", [])
             ar_subs = [s for s in subs if s.get("lang") in ("ara", "ar")]
             if ar_subs:
-                log("SUBS", f"Found {len(ar_subs)} Arabic subtitles on OpenSubtitles v3 endpoint.")
-                for candidate in ar_subs:
+                log("SUBS", f"Found {len(ar_subs)} Arabic subtitles on OpenSubtitles v3 endpoint. Validating candidates...")
+                for idx, candidate in enumerate(ar_subs, start=1):
                     dl_url = candidate.get("url")
                     if not dl_url:
                         continue
-                    sub_resp = requests.get(dl_url, headers=HEADERS, timeout=12)
-                    if sub_resp.status_code == 200 and len(sub_resp.content) > 100:
-                        clean_text = decode_arabic_subtitle_bytes(sub_resp.content)
-                        if clean_text and re.search(r'[\u0600-\u06FF]', clean_text):
-                            out_srt = os.path.join(subs_dir, f"{imdb_id}_{episode_tag}_ara.srt")
-                            with open(out_srt, "w", encoding="utf-8", newline="\n") as f:
-                                f.write(clean_text)
-                            log("SUBS", f"✅ TV Subtitle decoded via robust Arabic decoder and saved -> {os.path.basename(out_srt)}")
-                            return out_srt
+                    try:
+                        sub_resp = requests.get(dl_url, headers=HEADERS, timeout=12)
+                        if sub_resp.status_code == 200 and len(sub_resp.content) > 100:
+                            raw_text = decode_arabic_subtitle_bytes(sub_resp.content)
+                            clean_text = fix_arabic_mojibake(raw_text)
+                            arabic_count = len(re.findall(r'[\u0600-\u06FF]', clean_text))
+                            if arabic_count >= 30:
+                                out_srt = os.path.join(subs_dir, f"{imdb_id}_{episode_tag}_ara.srt")
+                                with open(out_srt, "w", encoding="utf-8", newline="\n") as f:
+                                    f.write(clean_text)
+                                log("SUBS", f"✅ TV Subtitle candidate {idx}/{len(ar_subs)} verified ({arabic_count} Arabic chars) and saved -> {os.path.basename(out_srt)}")
+                                return out_srt
+                            else:
+                                log("SUBS", f"⚠️ Candidate subtitle {idx}/{len(ar_subs)} failed validation ({arabic_count} Arabic chars), trying next available subtitle...")
+                    except Exception as ce:
+                        log("SUBS", f"⚠️ Candidate subtitle {idx}/{len(ar_subs)} download error: {ce}, trying next available subtitle...")
+                        continue
     except Exception as e:
         log("SUBS", f"OpenSubtitles v3 notice: {e}")
 
@@ -1518,14 +1549,16 @@ def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
         log("HARDSUB", "ffmpeg not found in PATH; skipping hardsubbing and using raw video.")
         return video_path
 
-    # 1. Force UTF-8 conversion testing priority encodings: utf-8-sig, utf-8, cp1256, windows-1256, iso-8859-6, utf-16, latin-1
+    # 1. Force UTF-8 conversion testing priority encodings and auto-repair mojibake
     try:
         clean_sub_text = read_subtitle_file_robustly(srt_path)
-        if not clean_sub_text or not re.search(r'[\u0600-\u06FF]', clean_sub_text):
-            log("HARDSUB", f"⚠️ Subtitle '{srt_path}' contains no Arabic Unicode characters across tested encodings; using original video.")
+        clean_sub_text = fix_arabic_mojibake(clean_sub_text)
+        ar_count = len(re.findall(r'[\u0600-\u06FF]', clean_sub_text)) if clean_sub_text else 0
+        if not clean_sub_text or ar_count < 30:
+            log("HARDSUB", f"⚠️ Subtitle '{srt_path}' contains fewer than 30 Arabic Unicode characters ({ar_count}); using original video.")
             return video_path
 
-        log("SUBS", "ℹ️ Subtitle decoded robustly and verified to contain Arabic characters.")
+        log("SUBS", f"ℹ️ Subtitle decoded robustly, auto-repaired, and verified ({ar_count} Arabic characters).")
     except Exception as e:
         log("HARDSUB", f"⚠️ Error validating subtitle encoding: {e}; falling back to raw video.")
         return video_path
@@ -1554,6 +1587,19 @@ def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
         log("HARDSUB", f"⚠️ Could not write {staged_clean_srt}: {e}")
         staged_clean_srt = srt_path
 
+    # Validate output subtitle file in staging before invoking FFmpeg
+    try:
+        with open(staged_clean_srt, 'r', encoding='utf-8') as vf:
+            staged_check_text = vf.read()
+        staged_ar_count = len(re.findall(r'[\u0600-\u06FF]', staged_check_text))
+        if staged_ar_count < 30:
+            log("HARDSUB", f"⚠️ Staged subtitle {staged_clean_srt} contains fewer than 30 Arabic characters ({staged_ar_count}); aborting hardsub and using original video.")
+            return video_path
+        log("HARDSUB", f"✅ Staged subtitle validated on disk ({staged_ar_count} Arabic characters) before invoking FFmpeg.")
+    except Exception as e:
+        log("HARDSUB", f"⚠️ Error validating staged subtitle file: {e}; using original video.")
+        return video_path
+
     # Stage input video via symlink (instant & zero disk overhead on Linux/Colab)
     video_abs_path = os.path.abspath(video_path)
     ffmpeg_input = "input_video.mp4"
@@ -1575,7 +1621,7 @@ def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
     accel = detect_hardware_acceleration()
     v_args_1080p = accel["video_args_1080p"]
 
-    sub_style = "FontName=Noto Kufi Arabic,FontSize=21,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=1.8,Shadow=1.0,MarginV=32,Alignment=2"
+    sub_style = "FontName=Noto Kufi Arabic,Noto Sans Arabic,FontSize=21,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=1.8,Shadow=1.0,MarginV=32,Alignment=2"
     sub_filter_rel = f"subtitles=sub.srt:force_style='{sub_style}'"
 
     ffmpeg_log = os.path.join(staging_dir, "ffmpeg_process.log")
