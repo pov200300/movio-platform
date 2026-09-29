@@ -879,10 +879,65 @@ def download_with_aria2(torrent_source: str, download_dir: str = DOWNLOAD_DIR, s
     log("ARIA2", f"✅ Download verified intact: {os.path.basename(target_video)} ({file_size_mb:.2f} MB)")
     return target_video
 
+def decode_arabic_subtitle_bytes(raw_bytes: bytes) -> str:
+    """
+    Robust Arabic-aware subtitle decoder testing candidate encodings in strict priority:
+    ['utf-8-sig', 'utf-8', 'cp1256', 'windows-1256', 'iso-8859-6', 'latin1']
+    Verifies that decoded text actually contains Arabic characters (Unicode block 0600-06FF).
+    """
+    if not raw_bytes:
+        return ""
+
+    raw_bytes = raw_bytes.replace(b"\x00", b"")
+
+    # List encodings to try in order of priority
+    candidates = ['utf-8-sig', 'utf-8', 'cp1256', 'windows-1256', 'iso-8859-6', 'latin1']
+
+    for enc in candidates:
+        try:
+            text = raw_bytes.decode(enc)
+            # Verify that decoded text actually contains Arabic characters (Unicode block 0600-06FF)
+            if re.search(r'[\u0600-\u06FF]', text):
+                return text
+        except (UnicodeDecodeError, LookupError):
+            continue
+
+    # Fallback with error replacement if nothing matched cleanly
+    try:
+        return raw_bytes.decode('cp1256', errors='replace')
+    except Exception:
+        return raw_bytes.decode('utf-8', errors='replace')
+
+
+def decode_arabic_subtitle(raw_bytes: bytes) -> tuple:
+    """
+    Backwards-compatible wrapper returning (clean_text, detected_enc) using decode_arabic_subtitle_bytes.
+    """
+    if not raw_bytes:
+        return None, None
+
+    raw_bytes = raw_bytes.replace(b"\x00", b"")
+    candidates = ['utf-8-sig', 'utf-8', 'cp1256', 'windows-1256', 'iso-8859-6', 'latin1']
+    for enc in candidates:
+        try:
+            text = raw_bytes.decode(enc)
+            if re.search(r'[\u0600-\u06FF]', text):
+                clean_text = text.lstrip("\ufeff").replace("\r\n", "\n").replace("\r", "\n")
+                return clean_text, enc
+        except (UnicodeDecodeError, LookupError):
+            continue
+
+    fallback = decode_arabic_subtitle_bytes(raw_bytes)
+    if fallback and re.search(r'[\u0600-\u06FF]', fallback):
+        clean_text = fallback.lstrip("\ufeff").replace("\r\n", "\n").replace("\r", "\n")
+        return clean_text, "cp1256"
+
+    return None, None
+
+
 def read_subtitle_file_robustly(file_path: str) -> str:
     """
-    Read subtitle file as binary bytes, strip UTF-8/UTF-16 BOMs and null bytes,
-    and decode testing encodings in strict priority order for Arabic characters (\u0600-\u06FF).
+    Read subtitle file as binary bytes and decode using robust Arabic-aware decoder.
     """
     if not file_path or not os.path.exists(file_path):
         return ""
@@ -890,70 +945,7 @@ def read_subtitle_file_robustly(file_path: str) -> str:
     with open(file_path, "rb") as f:
         raw_bytes = f.read()
 
-    # Strip UTF-8 / UTF-16 BOMs and null bytes
-    raw_bytes = raw_bytes.replace(b"\x00", b"")
-
-    # Encodings to test in strict priority
-    encodings = ["utf-8-sig", "utf-8", "cp1256", "windows-1256", "iso-8859-6", "utf-16", "latin-1"]
-
-    for enc in encodings:
-        try:
-            decoded = raw_bytes.decode(enc)
-            # Check if Arabic characters exist in the decoded output
-            if any("\u0600" <= ch <= "\u06FF" for ch in decoded):
-                return decoded
-        except UnicodeDecodeError:
-            continue
-
-    # Fallback with ignore if no pure Arabic block matched
-    return raw_bytes.decode("cp1256", errors="replace")
-
-
-def decode_arabic_subtitle(raw_bytes: bytes) -> tuple:
-    """
-    Decodes raw subtitle bytes testing encodings strictly in priority order:
-    1. utf-8-sig
-    2. utf-8
-    3. cp1256 (Windows Arabic)
-    4. windows-1256
-    5. iso-8859-6
-    6. utf-16
-    7. latin-1
-    Only accepts if decoded text contains Arabic Unicode characters (\u0600-\u06FF).
-    Returns (cleaned_text, detected_encoding) or (None, None).
-    """
-    if not raw_bytes:
-        return None, None
-
-    raw_bytes = raw_bytes.replace(b"\x00", b"")
-    encodings_to_try = ["utf-8-sig", "utf-8", "cp1256", "windows-1256", "iso-8859-6", "utf-16", "latin-1"]
-
-    # Pass 1: Strict check (timing marker '-->' and Arabic Unicode characters)
-    for enc in encodings_to_try:
-        try:
-            candidate = raw_bytes.decode(enc)
-            if "-->" in candidate and any("\u0600" <= ch <= "\u06FF" for ch in candidate):
-                clean_text = candidate.lstrip("\ufeff").replace("\r\n", "\n").replace("\r", "\n")
-                return clean_text, enc
-        except (UnicodeDecodeError, LookupError):
-            continue
-
-    # Pass 2: Fallback check (Arabic Unicode characters present)
-    for enc in encodings_to_try:
-        try:
-            candidate = raw_bytes.decode(enc)
-            if any("\u0600" <= ch <= "\u06FF" for ch in candidate):
-                clean_text = candidate.lstrip("\ufeff").replace("\r\n", "\n").replace("\r", "\n")
-                return clean_text, enc
-        except (UnicodeDecodeError, LookupError):
-            continue
-
-    fallback = raw_bytes.decode("cp1256", errors="replace")
-    if any("\u0600" <= ch <= "\u06FF" for ch in fallback):
-        clean_text = fallback.lstrip("\ufeff").replace("\r\n", "\n").replace("\r", "\n")
-        return clean_text, "cp1256"
-
-    return None, None
+    return decode_arabic_subtitle_bytes(raw_bytes)
 
 # =============================================================================
 # 4. ARABIC-ONLY SUBTITLES & FFMPEG HARDSUBBING (BURN-IN)
@@ -1062,17 +1054,15 @@ def download_subtitles_for_imdb(imdb_id: str, output_dir: str = DOWNLOAD_DIR) ->
                         continue
 
                     selected_text = None
-                    selected_encoding = None
                     target_filename = None
 
                     # Prioritize .srt files matching *ara* or *arabic* in their filename
                     sorted_files = sorted(srt_files, key=lambda x: 0 if ("arabic" in x.lower() or "ara" in x.lower()) else 1)
                     for fname in sorted_files:
                         f_bytes = z.read(fname)
-                        decoded_text, detected_enc = decode_arabic_subtitle(f_bytes)
-                        if decoded_text:
+                        decoded_text = decode_arabic_subtitle_bytes(f_bytes)
+                        if decoded_text and re.search(r'[\u0600-\u06FF]', decoded_text):
                             selected_text = decoded_text
-                            selected_encoding = detected_enc
                             target_filename = fname
                             break
 
@@ -1084,7 +1074,7 @@ def download_subtitles_for_imdb(imdb_id: str, output_dir: str = DOWNLOAD_DIR) ->
                     with open(out_srt, "w", encoding="utf-8", newline="\n") as sf:
                         sf.write(selected_text)
 
-                    log("SUBS", f"ℹ️ Subtitle decoded using '{selected_encoding}' and re-encoded to UTF-8.")
+                    log("SUBS", f"ℹ️ Subtitle decoded using robust Arabic decoder and re-encoded to clean UTF-8.")
                     log("SUBS", f"✅ Extracted and verified Arabic subtitle -> {os.path.basename(out_srt)}")
                     return out_srt
         except Exception as e:
@@ -1124,12 +1114,12 @@ def download_subtitles_for_tv_episode(imdb_id: str, season_num: int, episode_num
                         continue
                     sub_resp = requests.get(dl_url, headers=HEADERS, timeout=12)
                     if sub_resp.status_code == 200 and len(sub_resp.content) > 100:
-                        clean_text, enc = decode_arabic_subtitle(sub_resp.content)
-                        if clean_text:
+                        clean_text = decode_arabic_subtitle_bytes(sub_resp.content)
+                        if clean_text and re.search(r'[\u0600-\u06FF]', clean_text):
                             out_srt = os.path.join(subs_dir, f"{imdb_id}_{episode_tag}_ara.srt")
                             with open(out_srt, "w", encoding="utf-8", newline="\n") as f:
                                 f.write(clean_text)
-                            log("SUBS", f"✅ TV Subtitle decoded via '{enc}' and saved -> {os.path.basename(out_srt)}")
+                            log("SUBS", f"✅ TV Subtitle decoded via robust Arabic decoder and saved -> {os.path.basename(out_srt)}")
                             return out_srt
     except Exception as e:
         log("SUBS", f"OpenSubtitles v3 notice: {e}")
@@ -1531,7 +1521,7 @@ def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
     # 1. Force UTF-8 conversion testing priority encodings: utf-8-sig, utf-8, cp1256, windows-1256, iso-8859-6, utf-16, latin-1
     try:
         clean_sub_text = read_subtitle_file_robustly(srt_path)
-        if not clean_sub_text or not any("\u0600" <= ch <= "\u06FF" for ch in clean_sub_text):
+        if not clean_sub_text or not re.search(r'[\u0600-\u06FF]', clean_sub_text):
             log("HARDSUB", f"⚠️ Subtitle '{srt_path}' contains no Arabic Unicode characters across tested encodings; using original video.")
             return video_path
 
