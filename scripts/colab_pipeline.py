@@ -50,12 +50,16 @@ try:
     from google.colab import userdata
     _COLAB_WP_PASS = userdata.get('WP_APP_PASSWORD')
     _COLAB_TMDB_KEY = userdata.get('TMDB_API_KEY')
+    _COLAB_VIDMOLY_KEY = userdata.get('VIDMOLY_API_KEY')
+    _COLAB_STREAMHG_KEY = userdata.get('STREAMHG_API_KEY')
     _COLAB_DOOD_KEY = userdata.get('DOODSTREAM_API_KEY')
     _COLAB_STREAMTAPE_LOGIN = userdata.get('STREAMTAPE_LOGIN')
     _COLAB_STREAMTAPE_KEY = userdata.get('STREAMTAPE_KEY')
 except Exception:
     _COLAB_WP_PASS = None
     _COLAB_TMDB_KEY = None
+    _COLAB_VIDMOLY_KEY = None
+    _COLAB_STREAMHG_KEY = None
     _COLAB_DOOD_KEY = None
     _COLAB_STREAMTAPE_LOGIN = None
     _COLAB_STREAMTAPE_KEY = None
@@ -69,11 +73,13 @@ WP_APP_PASSWORD = os.getenv("WP_APP_PASSWORD") or _COLAB_WP_PASS or ""
 NEXTJS_URL = os.getenv("NEXTJS_URL", "https://egymax.vercel.app").rstrip("/")
 
 TMDB_API_KEY = os.getenv("TMDB_API_KEY") or _COLAB_TMDB_KEY or ""
-DOODSTREAM_API_KEY = os.getenv("DOODSTREAM_API_KEY") or _COLAB_DOOD_KEY or ""
+VIDMOLY_API_KEY = os.getenv("VIDMOLY_API_KEY") or _COLAB_VIDMOLY_KEY or "6336771q20ng1yr881rjlr"
+STREAMHG_API_KEY = os.getenv("STREAMHG_API_KEY") or _COLAB_STREAMHG_KEY or "33949r9v5gqs5jy2w0ecv"
+DOODSTREAM_API_KEY = os.getenv("DOODSTREAM_API_KEY") or _COLAB_DOOD_KEY or "578084calkr4oo4gnpz7ni"
 DOODSTREAM_API_BASE = "https://doodapi.com/api"
 
-STREAMTAPE_LOGIN = os.getenv("STREAMTAPE_LOGIN") or _COLAB_STREAMTAPE_LOGIN or ""
-STREAMTAPE_KEY = os.getenv("STREAMTAPE_KEY") or _COLAB_STREAMTAPE_KEY or ""
+STREAMTAPE_LOGIN = os.getenv("STREAMTAPE_LOGIN") or _COLAB_STREAMTAPE_LOGIN or "06340d1c727a30bcd350"
+STREAMTAPE_KEY = os.getenv("STREAMTAPE_KEY") or _COLAB_STREAMTAPE_KEY or "BbWjjoderVTyxx2"
 STREAMTAPE_API_BASE = "https://api.streamtape.com"
 
 DOWNLOAD_DIR = "/content/download" if os.path.exists("/content") else os.path.abspath("./downloads")
@@ -947,7 +953,7 @@ def download_with_aria2(torrent_source: str, download_dir: str = DOWNLOAD_DIR, s
         torrent_source
     ]
     
-    proc = subprocess.run(cmd, capture_output=False, timeout=5400)
+    proc = subprocess.run(cmd, capture_output=False, timeout=2700)
     if proc.returncode != 0:
         raise RuntimeError(f"aria2c download failed with exit code {proc.returncode}")
 
@@ -1757,7 +1763,7 @@ def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
     ]
 
     with open(ffmpeg_log, "w", encoding="utf-8") as lf:
-        proc = subprocess.run(cmd, stdout=lf, stderr=lf, cwd=staging_dir, timeout=9000)
+        proc = subprocess.run(cmd, stdout=lf, stderr=lf, cwd=staging_dir, timeout=14400)
     if proc.returncode != 0:
         err_snippet = ""
         try:
@@ -1781,7 +1787,7 @@ def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
             "output_1080p.mp4"
         ]
         with open(ffmpeg_log, "a", encoding="utf-8") as lf:
-            proc = subprocess.run(cmd_abs, stdout=lf, stderr=lf, cwd=staging_dir, timeout=9000)
+            proc = subprocess.run(cmd_abs, stdout=lf, stderr=lf, cwd=staging_dir, timeout=14400)
 
         # Dynamic fallback: If NVENC failed, try multi-threaded CPU libx264 as safeguard
         if proc.returncode != 0 and accel["mode"] == "nvenc":
@@ -1797,7 +1803,7 @@ def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
                 "output_1080p.mp4"
             ]
             with open(ffmpeg_log, "a", encoding="utf-8") as lf:
-                proc = subprocess.run(cmd_cpu, stdout=lf, stderr=lf, cwd=staging_dir, timeout=9000)
+                proc = subprocess.run(cmd_cpu, stdout=lf, stderr=lf, cwd=staging_dir, timeout=14400)
 
         if proc.returncode != 0:
             err_snippet = ""
@@ -1863,7 +1869,7 @@ def downscale_to_720p(input_1080p_path: str, output_720p_path: str = None) -> st
         output_720p_path
     ]
     with open(ffmpeg_log, "a", encoding="utf-8") as lf:
-        proc = subprocess.run(cmd, stdout=lf, stderr=lf, timeout=9000)
+        proc = subprocess.run(cmd, stdout=lf, stderr=lf, timeout=14400)
 
     # Dynamic fallback: if NVENC failed, try multi-threaded CPU libx264
     if proc.returncode != 0 and accel["mode"] == "nvenc":
@@ -1879,7 +1885,7 @@ def downscale_to_720p(input_1080p_path: str, output_720p_path: str = None) -> st
             output_720p_path
         ]
         with open(ffmpeg_log, "a", encoding="utf-8") as lf:
-            proc = subprocess.run(cmd_cpu, stdout=lf, stderr=lf, timeout=9000)
+            proc = subprocess.run(cmd_cpu, stdout=lf, stderr=lf, timeout=14400)
 
     if proc.returncode != 0:
         err_snippet = ""
@@ -1898,13 +1904,257 @@ def downscale_to_720p(input_1080p_path: str, output_720p_path: str = None) -> st
 # =============================================================================
 # 5. STREAMING HOST UPLOAD (DOODSTREAM API) WITH RESILIENCE & RETRIES
 # =============================================================================
+# =============================================================================
+# 5. MULTI-SERVER STREAMING HOST UPLOAD ENGINES (VIDMOLY, STREAMHG, STREAMTAPE, DOODSTREAM)
+# =============================================================================
+
+def upload_to_vidmoly(video_path: str, api_key: str = VIDMOLY_API_KEY, max_retries: int = 3) -> str:
+    """
+    Upload local video file to Vidmoly API and return clean embed URL: https://vidmoly.to/embed-{filecode}.html
+    1. Requests upload server slot: GET https://vidmoly.to/api/upload/server?key={api_key} (fallback vidmoly.me)
+    2. POST multipart video file to returned server URL.
+    3. Extracts filecode and returns clean embed URL.
+    Graceful handling: logs warning and returns None on failure.
+    """
+    if not api_key:
+        log("VIDMOLY", "⚠️ VIDMOLY_API_KEY is not configured; skipping Vidmoly upload.")
+        return None
+
+    if not os.path.exists(video_path):
+        log("VIDMOLY", f"⚠️ Video file does not exist: {video_path}")
+        return None
+
+    filename = os.path.basename(video_path)
+    file_size_mb = os.path.getsize(video_path) / (1024 * 1024)
+    mirrors = ["https://vidmoly.me", "https://vidmoly.to"]
+
+    last_error = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            log("VIDMOLY", f"Requesting Vidmoly upload server (Attempt {attempt}/{max_retries})...")
+            upload_url = None
+            for mirror in mirrors:
+                try:
+                    srv_resp = requests.get(
+                        f"{mirror}/api/upload/server",
+                        params={"key": api_key},
+                        headers=HEADERS,
+                        timeout=15
+                    )
+                    if srv_resp.status_code == 200:
+                        data = srv_resp.json()
+                        if data.get("result"):
+                            upload_url = data["result"]
+                            break
+                except Exception:
+                    continue
+
+            if not upload_url:
+                raise RuntimeError("Failed to allocate Vidmoly upload server across active mirrors")
+
+            log("VIDMOLY", f"Assigned server: {upload_url[:50]}... Uploading '{filename}' ({file_size_mb:.1f} MB)...")
+
+            if HAS_TOOLBELT:
+                with open(video_path, 'rb') as f:
+                    encoder = MultipartEncoder(fields={
+                        'file': (filename, f, 'video/mp4'),
+                        'key': api_key
+                    })
+                    last_pct = [-1]
+                    def progress(monitor):
+                        pct = int((monitor.bytes_read / monitor.len) * 100)
+                        if pct % 10 == 0 and pct != last_pct[0]:
+                            last_pct[0] = pct
+                            print(f"  [Vidmoly Progress] {pct}% ({monitor.bytes_read / (1024*1024):.1f} MB / {monitor.len / (1024*1024):.1f} MB)", flush=True)
+                    monitor = MultipartEncoderMonitor(encoder, progress)
+                    resp = requests.post(
+                        upload_url,
+                        data=monitor,
+                        headers={'Content-Type': monitor.content_type, 'User-Agent': HEADERS["User-Agent"]},
+                        timeout=7200
+                    )
+            else:
+                with open(video_path, 'rb') as f:
+                    resp = requests.post(
+                        upload_url,
+                        files={'file': (filename, f, 'video/mp4')},
+                        data={'key': api_key},
+                        headers={'User-Agent': HEADERS["User-Agent"]},
+                        timeout=7200
+                    )
+
+            resp_text = resp.text
+            filecode = None
+            try:
+                rj = resp.json()
+                filecode = (
+                    rj.get("files", [{}])[0].get("filecode")
+                    or rj.get("result", [{}])[0].get("filecode")
+                    or rj.get("filecode")
+                    or rj.get("file_code")
+                )
+            except Exception:
+                pass
+
+            if not filecode:
+                m = re.search(r'name=["\']file_code["\']>([^<]+)<', resp_text)
+                if not m:
+                    m = re.search(r'name=["\']filecode["\']>([^<]+)<', resp_text)
+                if not m:
+                    m = re.search(r'["\'](?:filecode|file_code)["\']\s*:\s*["\']([^"\']+)["\']', resp_text)
+                if not m:
+                    m = re.search(r'/embed-([a-zA-Z0-9]+)\.html', resp_text)
+                if m:
+                    filecode = m.group(1).strip()
+
+            if not filecode:
+                raise RuntimeError(f"Could not parse Vidmoly filecode from response: {resp_text[:300]}")
+
+            embed_url = f"https://vidmoly.to/embed-{filecode}.html"
+            log("VIDMOLY", f"✅ Upload successful! Filecode: {filecode} -> {embed_url}")
+            return embed_url
+
+        except Exception as e:
+            last_error = e
+            log("VIDMOLY", f"Upload attempt {attempt} notice: {e.__class__.__name__}: {e}")
+            if attempt < max_retries:
+                wait_sec = attempt * 5
+                log("VIDMOLY", f"Waiting {wait_sec}s before retrying...")
+                time.sleep(wait_sec)
+
+    log("VIDMOLY", f"⚠️ Vidmoly upload failed after {max_retries} attempts: {last_error}")
+    return None
+
+def upload_to_streamhg(video_path: str, api_key: str = STREAMHG_API_KEY, max_retries: int = 3) -> str:
+    """
+    Upload local video file to StreamHG API and return clean embed URL: https://streamhg.com/e/{filecode}
+    1. Requests upload server slot: GET https://streamhgapi.com/api/upload/server?key={api_key} (fallback streamhg.com)
+    2. POST multipart video file to returned server URL with file and key.
+    3. Extracts filecode and returns clean embed URL.
+    Graceful handling: logs warning and returns None on failure.
+    """
+    if not api_key:
+        log("STREAMHG", "⚠️ STREAMHG_API_KEY is not configured; skipping StreamHG upload.")
+        return None
+
+    if not os.path.exists(video_path):
+        log("STREAMHG", f"⚠️ Video file does not exist: {video_path}")
+        return None
+
+    filename = os.path.basename(video_path)
+    file_size_mb = os.path.getsize(video_path) / (1024 * 1024)
+    mirrors = ["https://streamhgapi.com", "https://streamhg.com"]
+
+    last_error = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            log("STREAMHG", f"Requesting StreamHG upload server (Attempt {attempt}/{max_retries})...")
+            upload_url = None
+            for mirror in mirrors:
+                try:
+                    srv_resp = requests.get(
+                        f"{mirror}/api/upload/server",
+                        params={"key": api_key},
+                        headers=HEADERS,
+                        timeout=15
+                    )
+                    if srv_resp.status_code == 200:
+                        data = srv_resp.json()
+                        if data.get("result"):
+                            upload_url = data["result"]
+                            break
+                except Exception:
+                    continue
+
+            if not upload_url:
+                raise RuntimeError("Failed to allocate StreamHG upload server across active mirrors")
+
+            log("STREAMHG", f"Assigned server: {upload_url[:50]}... Uploading '{filename}' ({file_size_mb:.1f} MB)...")
+
+            if HAS_TOOLBELT:
+                with open(video_path, 'rb') as f:
+                    encoder = MultipartEncoder(fields={
+                        'file': (filename, f, 'video/mp4'),
+                        'key': api_key
+                    })
+                    last_pct = [-1]
+                    def progress(monitor):
+                        pct = int((monitor.bytes_read / monitor.len) * 100)
+                        if pct % 10 == 0 and pct != last_pct[0]:
+                            last_pct[0] = pct
+                            print(f"  [StreamHG Progress] {pct}% ({monitor.bytes_read / (1024*1024):.1f} MB / {monitor.len / (1024*1024):.1f} MB)", flush=True)
+                    monitor = MultipartEncoderMonitor(encoder, progress)
+                    resp = requests.post(
+                        upload_url,
+                        data=monitor,
+                        headers={'Content-Type': monitor.content_type, 'User-Agent': HEADERS["User-Agent"]},
+                        timeout=7200
+                    )
+            else:
+                with open(video_path, 'rb') as f:
+                    resp = requests.post(
+                        upload_url,
+                        files={'file': (filename, f, 'video/mp4')},
+                        data={'key': api_key},
+                        headers={'User-Agent': HEADERS["User-Agent"]},
+                        timeout=7200
+                    )
+
+            resp_text = resp.text
+            filecode = None
+            try:
+                rj = resp.json()
+                files = rj.get("files", [])
+                if files and isinstance(files, list):
+                    filecode = files[0].get("filecode") or files[0].get("file_code")
+                if not filecode and rj.get("result"):
+                    res_val = rj["result"]
+                    if isinstance(res_val, list) and res_val:
+                        filecode = res_val[0].get("filecode") or res_val[0].get("file_code")
+                    elif isinstance(res_val, dict):
+                        filecode = res_val.get("filecode") or res_val.get("file_code")
+                if not filecode:
+                    filecode = rj.get("filecode") or rj.get("file_code")
+            except Exception:
+                pass
+
+            if not filecode:
+                m = re.search(r'["\'](?:filecode|file_code)["\']\s*:\s*["\']([^"\']+)["\']', resp_text)
+                if not m:
+                    m = re.search(r'/e/([a-zA-Z0-9]+)', resp_text)
+                if m:
+                    filecode = m.group(1).strip()
+
+            if not filecode:
+                raise RuntimeError(f"Could not parse StreamHG filecode from response: {resp_text[:300]}")
+
+            embed_url = f"https://streamhg.com/e/{filecode}"
+            log("STREAMHG", f"✅ Upload successful! Filecode: {filecode} -> {embed_url}")
+            return embed_url
+
+        except Exception as e:
+            last_error = e
+            log("STREAMHG", f"Upload attempt {attempt} notice: {e.__class__.__name__}: {e}")
+            if attempt < max_retries:
+                wait_sec = attempt * 5
+                log("STREAMHG", f"Waiting {wait_sec}s before retrying...")
+                time.sleep(wait_sec)
+
+    log("STREAMHG", f"⚠️ StreamHG upload failed after {max_retries} attempts: {last_error}")
+    return None
+
 def upload_to_doodstream(video_path: str, api_key: str = DOODSTREAM_API_KEY, max_retries: int = 3) -> str:
     """
     Upload local video file to DoodStream API using chunked streaming.
     Includes retry loop and requests a fresh server URL on disconnect/timeout.
     """
     if not api_key:
-        raise ValueError("DOODSTREAM_API_KEY is not set. Please provide a valid DoodStream API key.")
+        log("DOOD", "⚠️ DOODSTREAM_API_KEY is not configured; skipping DoodStream upload.")
+        return None
+
+    if not os.path.exists(video_path):
+        log("DOOD", f"⚠️ Video file does not exist: {video_path}")
+        return None
 
     filename = os.path.basename(video_path)
     file_size_bytes = os.path.getsize(video_path)
@@ -1952,7 +2202,7 @@ def upload_to_doodstream(video_path: str, api_key: str = DOODSTREAM_API_KEY, max
             result = resp["result"]
             file_code = result[0]["filecode"] if isinstance(result, list) else result.get("filecode")
             embed_url = f"https://doodstream.com/e/{file_code}"
-            log("DOOD", f"Upload successful! File Code: {file_code} -> {embed_url}")
+            log("DOOD", f"✅ Upload successful! File Code: {file_code} -> {embed_url}")
             return embed_url
 
         except Exception as e:
@@ -1963,7 +2213,8 @@ def upload_to_doodstream(video_path: str, api_key: str = DOODSTREAM_API_KEY, max
                 log("DOOD", f"Waiting {wait_time}s before allocating a fresh server and retrying...")
                 time.sleep(wait_time)
 
-    raise RuntimeError(f"DoodStream upload failed after {max_retries} attempts. Last error: {last_error}")
+    log("DOOD", f"⚠️ DoodStream upload failed after {max_retries} attempts: {last_error}")
+    return None
 
 def upload_to_streamtape(video_path: str, login: str = STREAMTAPE_LOGIN, key: str = STREAMTAPE_KEY, max_retries: int = 3) -> str:
     """
@@ -1973,7 +2224,12 @@ def upload_to_streamtape(video_path: str, login: str = STREAMTAPE_LOGIN, key: st
     3. Returns clean embed URL: https://streamtape.com/e/{file_id}
     """
     if not login or not key:
-        raise ValueError("STREAMTAPE_LOGIN or STREAMTAPE_KEY is not configured.")
+        log("STREAMTAPE", "⚠️ STREAMTAPE_LOGIN or STREAMTAPE_KEY is not configured; skipping Streamtape upload.")
+        return None
+
+    if not os.path.exists(video_path):
+        log("STREAMTAPE", f"⚠️ Video file does not exist: {video_path}")
+        return None
 
     filename = os.path.basename(video_path)
     file_size_bytes = os.path.getsize(video_path)
@@ -2034,7 +2290,7 @@ def upload_to_streamtape(video_path: str, login: str = STREAMTAPE_LOGIN, key: st
                 raise RuntimeError(f"Could not parse Streamtape file ID from response: {resp}")
 
             embed_url = f"https://streamtape.com/e/{file_id}"
-            log("STREAMTAPE", f"Upload successful! File ID: {file_id} -> {embed_url}")
+            log("STREAMTAPE", f"✅ Upload successful! File ID: {file_id} -> {embed_url}")
             return embed_url
 
         except Exception as e:
@@ -2045,62 +2301,176 @@ def upload_to_streamtape(video_path: str, login: str = STREAMTAPE_LOGIN, key: st
                 log("STREAMTAPE", f"Waiting {wait_time}s before retrying...")
                 time.sleep(wait_time)
 
-    raise RuntimeError(f"Streamtape upload failed after {max_retries} attempts. Last error: {last_error}")
+    log("STREAMTAPE", f"⚠️ Streamtape upload failed after {max_retries} attempts: {last_error}")
+    return None
+
+def generate_multi_server_player_html(active_servers: dict, fallback_url: str = "") -> str:
+    """
+    Generate a responsive, self-contained HTML/CSS/JS Multi-Server Player Switcher.
+    Displays tab buttons for each active server, highlighting the active tab with smooth
+    CSS transitions, and dynamic 16:9 iframe switching without page reload.
+    """
+    if not active_servers and fallback_url:
+        active_servers = {"السيرفر الأساسي": fallback_url}
+
+    if not active_servers:
+        return ""
+
+    server_items = list(active_servers.items())
+    first_name, first_url = server_items[0]
+
+    tab_buttons_html = []
+    for idx, (s_name, s_url) in enumerate(server_items):
+        is_first = (idx == 0)
+        btn_style = (
+            "background: #e11d48; color: #ffffff; border-color: #f43f5e;"
+            if is_first else
+            "background: #334155; color: #cbd5e1; border-color: #475569;"
+        )
+        label = s_name
+        s_lower = s_name.lower()
+        if "vidmoly" in s_lower:
+            label = "سيرفر 1 - Vidmoly [سريع جداً 1080p]"
+        elif "streamhg" in s_lower:
+            label = "سيرفر 2 - StreamHG [خفيف 720p]"
+        elif "streamtape" in s_lower:
+            label = "سيرفر 3 - Streamtape [سرعة عالية]"
+        elif "dood" in s_lower:
+            label = "سيرفر 4 - Doodstream [جودة أصلية]"
+
+        tab_buttons_html.append(
+            f'<button type="button" class="server-tab-btn" data-url="{s_url}" '
+            f'onclick="switchPlayerServer(this, \'{s_url}\')" '
+            f'style="padding: 7px 15px; font-size: 0.82rem; font-weight: 600; border-radius: 8px; border: 1px solid; cursor: pointer; transition: all 0.25s ease; outline: none; margin: 3px; {btn_style}">'
+            f'{label}'
+            f'</button>'
+        )
+
+    tabs_joined = "\n        ".join(tab_buttons_html)
+
+    vidmoly_val = active_servers.get("Vidmoly (1080p)") or active_servers.get("Vidmoly") or ""
+    streamhg_val = active_servers.get("StreamHG (720p)") or active_servers.get("StreamHG") or ""
+    streamtape_val = active_servers.get("Streamtape") or ""
+    dood_val = active_servers.get("Doodstream") or ""
+
+    return f"""<div class="egymax-player-wrapper" style="direction: rtl; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin-bottom: 2rem; background: #0f172a; border: 1px solid #1e293b; border-radius: 14px; overflow: hidden; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.5);">
+    <div class="player-servers-tabs" style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 12px; background: #1e293b; border-bottom: 1px solid #334155;">
+        <span style="display: inline-flex; align-items: center; color: #94a3b8; font-size: 0.85rem; font-weight: 600; margin-left: 8px;">
+            📺 اختر السيرفر:
+        </span>
+        {tabs_joined}
+    </div>
+    <div class="video-container" style="position: relative; padding-bottom: 56.25%; height: 0; overflow: hidden; background: #000;">
+        <iframe id="main-player-iframe" src="{first_url}" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: 0;" allowfullscreen="true" scrolling="no" frameborder="0"></iframe>
+    </div>
+</div>
+<!-- SERVERS: vidmoly={vidmoly_val} streamhg={streamhg_val} streamtape={streamtape_val} dood={dood_val} -->
+<script>
+function switchPlayerServer(btn, streamUrl) {{
+    var iframe = document.getElementById('main-player-iframe');
+    if (iframe && streamUrl) {{
+        iframe.src = streamUrl;
+    }}
+    var tabs = document.querySelectorAll('.server-tab-btn');
+    for (var i = 0; i < tabs.length; i++) {{
+        tabs[i].style.background = '#334155';
+        tabs[i].style.color = '#cbd5e1';
+        tabs[i].style.borderColor = '#475569';
+    }}
+    if (btn) {{
+        btn.style.background = '#e11d48';
+        btn.style.color = '#ffffff';
+        btn.style.borderColor = '#f43f5e';
+    }}
+}}
+</script>"""
 
 def upload_by_quality(video_path: str, quality: str = "1080p") -> dict:
     """
     Quality Distribution Logic:
-    - 1080p Quality: Automatically uploaded to Doodstream.
-    - 720p Quality:  Automatically uploaded to Streamtape.
-    Returns: {"primary_embed": str, "dood_embed": str, "streamtape_embed": str, "quality": str}
+    - 1080p Quality: Uploaded to Vidmoly (Server 1) & Doodstream (Server 4)
+    - 720p Quality:  Uploaded to StreamHG (Server 2) & Streamtape (Server 3)
+    Returns: {"primary_embed": str, "vidmoly_embed": str, "streamhg_embed": str, "dood_embed": str, "streamtape_embed": str, "quality": str, "active_servers": dict}
     """
     q_norm = quality.lower().strip()
-    dood_url = None
+    active_servers = {}
+    vidmoly_url = None
+    streamhg_url = None
     streamtape_url = None
+    dood_url = None
 
     if "720" in q_norm:
-        log("UPLOAD", "Quality is 720p -> Routing upload to Streamtape (Server 2)...")
-        streamtape_url = upload_to_streamtape(video_path)
-        primary = streamtape_url
+        log("UPLOAD", "Quality is 720p -> Routing upload to StreamHG (Server 2) & Streamtape (Server 3)...")
+        try: streamhg_url = upload_to_streamhg(video_path)
+        except Exception: streamhg_url = None
+        try: streamtape_url = upload_to_streamtape(video_path)
+        except Exception: streamtape_url = None
+        if not streamhg_url and not streamtape_url:
+            log("UPLOAD", "720p hosts unavailable; falling back to Vidmoly & Doodstream...")
+            try: vidmoly_url = upload_to_vidmoly(video_path)
+            except Exception: vidmoly_url = None
+            try: dood_url = upload_to_doodstream(video_path)
+            except Exception: dood_url = None
     else:
-        log("UPLOAD", f"Quality is {quality} (1080p FHD) -> Routing upload to Doodstream (Server 1)...")
-        dood_url = upload_to_doodstream(video_path)
-        primary = dood_url
+        log("UPLOAD", f"Quality is {quality} (1080p FHD) -> Routing upload to Vidmoly (Server 1) & Doodstream (Server 4)...")
+        try: vidmoly_url = upload_to_vidmoly(video_path)
+        except Exception: vidmoly_url = None
+        try: dood_url = upload_to_doodstream(video_path)
+        except Exception: dood_url = None
+        if not vidmoly_url and not dood_url:
+            log("UPLOAD", "1080p hosts unavailable; falling back to StreamHG & Streamtape...")
+            try: streamhg_url = upload_to_streamhg(video_path)
+            except Exception: streamhg_url = None
+            try: streamtape_url = upload_to_streamtape(video_path)
+            except Exception: streamtape_url = None
 
+    if vidmoly_url: active_servers["Vidmoly (1080p)" if "1080" in quality else "Vidmoly"] = vidmoly_url
+    if streamhg_url: active_servers["StreamHG (720p)" if "720" in quality else "StreamHG"] = streamhg_url
+    if streamtape_url: active_servers["Streamtape"] = streamtape_url
+    if dood_url: active_servers["Doodstream"] = dood_url
+
+    primary = vidmoly_url or streamhg_url or dood_url or streamtape_url
     return {
         "primary_embed": primary,
+        "vidmoly_embed": vidmoly_url,
+        "streamhg_embed": streamhg_url,
         "dood_embed": dood_url,
         "streamtape_embed": streamtape_url,
+        "active_servers": active_servers,
         "quality": quality,
     }
 
-def upload_to_multi_servers(video_path: str, quality: str = "1080p") -> dict:
+def upload_to_multi_servers(video_path_1080p: str, video_path_720p: str = None, quality: str = "both") -> dict:
     """
-    Upload to both Doodstream (Server 1) and Streamtape (Server 2)
-    to enable full multi-server switching in the player.
+    Upload across all 4 streaming hosts (Vidmoly 1080p, StreamHG 720p, Streamtape, Doodstream)
+    to enable responsive multi-server switching in the player.
     """
-    dood_url = None
-    streamtape_url = None
+    v_1080 = video_path_1080p
+    v_720 = video_path_720p or video_path_1080p
 
-    try:
-        log("UPLOAD", "Uploading to Server 1 (Doodstream)...")
-        dood_url = upload_to_doodstream(video_path)
-    except Exception as e:
-        log("UPLOAD", f"⚠️ Doodstream upload error: {e}")
+    log("UPLOAD", "Executing 4-Server Upload Matrix (Vidmoly, StreamHG, Streamtape, Doodstream)...")
+    vidmoly_url = upload_to_vidmoly(v_1080)
+    streamhg_url = upload_to_streamhg(v_720)
+    streamtape_url = upload_to_streamtape(v_720)
+    dood_url = upload_to_doodstream(v_1080)
 
-    try:
-        log("UPLOAD", "Uploading to Server 2 (Streamtape)...")
-        streamtape_url = upload_to_streamtape(video_path)
-    except Exception as e:
-        log("UPLOAD", f"⚠️ Streamtape upload error: {e}")
+    active_servers = {}
+    if vidmoly_url: active_servers["Vidmoly (1080p)"] = vidmoly_url
+    if streamhg_url: active_servers["StreamHG (720p)"] = streamhg_url
+    if streamtape_url: active_servers["Streamtape"] = streamtape_url
+    if dood_url: active_servers["Doodstream"] = dood_url
 
-    if not dood_url and not streamtape_url:
-        raise RuntimeError("Failed to upload to both Doodstream and Streamtape.")
+    primary = vidmoly_url or streamhg_url or dood_url or streamtape_url
+    if not primary:
+        raise RuntimeError("Failed to upload to any of the 4 configured streaming servers.")
 
     return {
-        "primary_embed": dood_url or streamtape_url,
+        "primary_embed": primary,
+        "vidmoly_embed": vidmoly_url,
+        "streamhg_embed": streamhg_url,
         "dood_embed": dood_url,
         "streamtape_embed": streamtape_url,
+        "active_servers": active_servers,
         "quality": quality,
     }
 
@@ -2261,6 +2631,9 @@ def publish_movie_to_pantheon(
     quality: str = "1080p",
     dood_embed: str = None,
     streamtape_embed: str = None,
+    vidmoly_embed: str = None,
+    streamhg_embed: str = None,
+    active_servers: dict = None,
     wp_site_url: str = WP_SITE_URL,
     username: str = WP_USERNAME,
     app_password: str = WP_APP_PASSWORD,
@@ -2268,8 +2641,9 @@ def publish_movie_to_pantheon(
     episode_data: dict = None
 ) -> dict:
     """
-    Publish movie or TV episode post with 16:9 responsive embed player, linked category IDs, and full metadata
-    into Pantheon Headless WordPress CMS. Supports both Doodstream and Streamtape servers.
+    Publish movie or TV episode post with responsive multi-server tabbed player switcher,
+    linked category IDs, and full metadata into Pantheon Headless WordPress CMS.
+    Saves _stream_vidmoly, _stream_streamhg, _stream_streamtape, _stream_doodstream into post meta.
     """
     is_ep = is_episode or meta.get("is_episode") or (meta.get("type") == "tv_episode")
     ep_data = episode_data or {}
@@ -2301,14 +2675,24 @@ def publish_movie_to_pantheon(
     if not imdb_rating:
         imdb_rating = "7.5"
 
+    vidmoly_clean = vidmoly_embed or (embed_url if "vidmoly" in str(embed_url).lower() else "")
+    streamhg_clean = streamhg_embed or (embed_url if "streamhg" in str(embed_url).lower() else "")
     dood_clean = dood_embed or (embed_url if "dood" in str(embed_url).lower() else "")
     streamtape_clean = streamtape_embed or (embed_url if "streamtape" in str(embed_url).lower() else "")
 
+    if not active_servers:
+        active_servers = {}
+        if vidmoly_clean: active_servers["Vidmoly (1080p)" if "1080" in quality else "Vidmoly"] = vidmoly_clean
+        if streamhg_clean: active_servers["StreamHG (720p)" if "720" in quality else "StreamHG"] = streamhg_clean
+        if streamtape_clean: active_servers["Streamtape"] = streamtape_clean
+        if dood_clean: active_servers["Doodstream"] = dood_clean
+        if not active_servers and embed_url:
+            active_servers["السيرفر الأساسي"] = embed_url
+
+    player_switcher_html = generate_multi_server_player_html(active_servers, fallback_url=embed_url)
+
     content = f"""
-<div class="video-container" style="position: relative; padding-bottom: 56.25%; height: 0; overflow: hidden; max-width: 100%; border-radius: 12px; margin-bottom: 1.5rem;">
-    <iframe src="{embed_url}" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: 0;" allowfullscreen="true" scrolling="no" frameborder="0"></iframe>
-</div>
-<!-- SERVERS: dood={dood_clean} streamtape={streamtape_clean} -->
+{player_switcher_html}
 
 <p>★ <strong>Rating:</strong> {imdb_rating} / 10 | <strong>Release Year:</strong> {meta.get('year', '2026')} | <strong>Quality:</strong> {quality}</p>
 
@@ -2334,12 +2718,20 @@ def publish_movie_to_pantheon(
         "vote_average": imdb_rating,
         "_imdb_rating": imdb_rating,
         "embed_url": embed_url,
+        "_stream_vidmoly": vidmoly_clean,
+        "_stream_streamhg": streamhg_clean,
+        "_stream_streamtape": streamtape_clean,
+        "_stream_doodstream": dood_clean,
+        "vidmoly_url": vidmoly_clean,
+        "streamhg_url": streamhg_clean,
         "doodstream_url": dood_clean,
         "streamtape_url": streamtape_clean,
         "dood_embed": dood_clean,
         "streamtape_embed": streamtape_clean,
-        "embed_url_1080p": dood_clean or (embed_url if "1080" in quality else ""),
-        "embed_url_720p": streamtape_clean or (embed_url if "720" in quality else ""),
+        "vidmoly_embed": vidmoly_clean,
+        "streamhg_embed": streamhg_clean,
+        "embed_url_1080p": vidmoly_clean or dood_clean or (embed_url if "1080" in quality else ""),
+        "embed_url_720p": streamhg_clean or streamtape_clean or (embed_url if "720" in quality else ""),
         "video_year": str(meta.get("year", "2026")),
         "quality": quality,
         "backdrop_url": meta.get("backdrop_url") or "",
@@ -2384,6 +2776,10 @@ def publish_movie_to_pantheon(
         return data
     else:
         raise RuntimeError(f"Pantheon WordPress publish failed ({res.status_code}): {res.text[:300]}")
+
+# Aliases for compatibility across tools and caller workflows
+publish_media_post = publish_movie_to_pantheon
+create_wordpress_post = publish_movie_to_pantheon
 
 # =============================================================================
 # MASTER PIPELINE ORCHESTRATOR
@@ -2493,21 +2889,37 @@ def run_pipeline(movie_title: str, release_year: str = None, imdb_id: str = None
             if not verify_video_integrity(burned_1080p_path):
                 raise RuntimeError(f"Rendered 1080p file is corrupted or incomplete; aborting upload. ({burned_1080p_path})")
 
-            dood_url = None
+            vidmoly_url = None
+            streamhg_url = None
             streamtape_url = None
+            dood_url = None
+            active_servers = {}
 
             if preferred_quality in ("both", "multi", "all"):
                 final_720p_filename = f"{clean_show}.{parsed['episode_tag']}.720p.Arabic.Hardsub.mp4"
                 rendered_720p_path = os.path.join(file_dir, final_720p_filename)
                 downscale_to_720p(burned_1080p_path, rendered_720p_path)
 
-                log("UPLOAD", "Uploading 1080p Hardsub to Doodstream (Server 1)...")
-                dood_url = upload_to_doodstream(burned_1080p_path)
+                # Server 1: Vidmoly (1080p HLS)
+                log("UPLOAD", "Uploading 1080p Hardsub to Vidmoly (Server 1 - Primary 1080p HLS)...")
+                try: vidmoly_url = upload_to_vidmoly(burned_1080p_path)
+                except Exception as e: log("UPLOAD", f"⚠️ Vidmoly error: {e}")
 
-                log("UPLOAD", "Uploading 720p Downscaled Hardsub to Streamtape (Server 2)...")
-                streamtape_url = upload_to_streamtape(rendered_720p_path)
+                # Server 2: StreamHG (720p Fast Adaptive)
+                log("UPLOAD", "Uploading 720p Downscaled Hardsub to StreamHG (Server 2 - Fast 720p Adaptive)...")
+                try: streamhg_url = upload_to_streamhg(rendered_720p_path)
+                except Exception as e: log("UPLOAD", f"⚠️ StreamHG error: {e}")
 
-                primary_embed = dood_url or streamtape_url
+                # Server 3: Streamtape (720p High Speed)
+                log("UPLOAD", "Uploading 720p Downscaled Hardsub to Streamtape (Server 3 - High Speed)...")
+                try: streamtape_url = upload_to_streamtape(rendered_720p_path)
+                except Exception as e: log("UPLOAD", f"⚠️ Streamtape error: {e}")
+
+                # Server 4: Doodstream (1080p Extra / Monetization)
+                log("UPLOAD", "Uploading 1080p Hardsub to Doodstream (Server 4 - Extra)...")
+                try: dood_url = upload_to_doodstream(burned_1080p_path)
+                except Exception as e: log("UPLOAD", f"⚠️ Doodstream error: {e}")
+
                 active_quality = "1080p & 720p"
             elif "720" in preferred_quality.lower():
                 final_720p_filename = f"{clean_show}.{parsed['episode_tag']}.720p.Arabic.Hardsub.mp4"
@@ -2518,15 +2930,47 @@ def run_pipeline(movie_title: str, release_year: str = None, imdb_id: str = None
                         os.remove(burned_1080p_path)
                         burned_1080p_path = None
                     except Exception: pass
-                log("UPLOAD", "Uploading 720p Hardsub to Streamtape (Server 2)...")
-                streamtape_url = upload_to_streamtape(rendered_720p_path)
-                primary_embed = streamtape_url
+
+                log("UPLOAD", "Uploading 720p Hardsub to Vidmoly (Server 1)...")
+                try: vidmoly_url = upload_to_vidmoly(rendered_720p_path)
+                except Exception as e: log("UPLOAD", f"⚠️ Vidmoly error: {e}")
+                log("UPLOAD", "Uploading 720p Hardsub to StreamHG (Server 2)...")
+                try: streamhg_url = upload_to_streamhg(rendered_720p_path)
+                except Exception as e: log("UPLOAD", f"⚠️ StreamHG error: {e}")
+                log("UPLOAD", "Uploading 720p Hardsub to Streamtape (Server 3)...")
+                try: streamtape_url = upload_to_streamtape(rendered_720p_path)
+                except Exception as e: log("UPLOAD", f"⚠️ Streamtape error: {e}")
+                log("UPLOAD", "Uploading 720p Hardsub to Doodstream (Server 4)...")
+                try: dood_url = upload_to_doodstream(rendered_720p_path)
+                except Exception as e: log("UPLOAD", f"⚠️ Doodstream error: {e}")
                 active_quality = "720p"
             else:
-                log("UPLOAD", "Uploading 1080p Hardsub to Doodstream (Server 1)...")
-                dood_url = upload_to_doodstream(burned_1080p_path)
-                primary_embed = dood_url
+                log("UPLOAD", "Uploading 1080p Hardsub to Vidmoly (Server 1)...")
+                try: vidmoly_url = upload_to_vidmoly(burned_1080p_path)
+                except Exception as e: log("UPLOAD", f"⚠️ Vidmoly error: {e}")
+                log("UPLOAD", "Uploading 1080p Hardsub to StreamHG (Server 2)...")
+                try: streamhg_url = upload_to_streamhg(burned_1080p_path)
+                except Exception as e: log("UPLOAD", f"⚠️ StreamHG error: {e}")
+                log("UPLOAD", "Uploading 1080p Hardsub to Streamtape (Server 3)...")
+                try: streamtape_url = upload_to_streamtape(burned_1080p_path)
+                except Exception as e: log("UPLOAD", f"⚠️ Streamtape error: {e}")
+                log("UPLOAD", "Uploading 1080p Hardsub to Doodstream (Server 4)...")
+                try: dood_url = upload_to_doodstream(burned_1080p_path)
+                except Exception as e: log("UPLOAD", f"⚠️ Doodstream error: {e}")
                 active_quality = "1080p"
+
+            if vidmoly_url:
+                active_servers["Vidmoly (1080p)" if "1080" in active_quality else "Vidmoly"] = vidmoly_url
+            if streamhg_url:
+                active_servers["StreamHG (720p)" if "720" in active_quality else "StreamHG"] = streamhg_url
+            if streamtape_url:
+                active_servers["Streamtape"] = streamtape_url
+            if dood_url:
+                active_servers["Doodstream"] = dood_url
+
+            primary_embed = vidmoly_url or streamhg_url or dood_url or streamtape_url
+            if not primary_embed:
+                raise RuntimeError("Failed to obtain embed URL from upload servers (Vidmoly, StreamHG, Doodstream, Streamtape all unavailable or failed).")
 
             # 6. Publish TV Episode post to Pantheon WordPress
             post_data = publish_movie_to_pantheon(
@@ -2535,6 +2979,9 @@ def run_pipeline(movie_title: str, release_year: str = None, imdb_id: str = None
                 active_quality,
                 dood_embed=dood_url,
                 streamtape_embed=streamtape_url,
+                vidmoly_embed=vidmoly_url,
+                streamhg_embed=streamhg_url,
+                active_servers=active_servers,
                 is_episode=True,
                 episode_data=parsed
             )
@@ -2623,9 +3070,12 @@ def run_pipeline(movie_title: str, release_year: str = None, imdb_id: str = None
             if not verify_video_integrity(burned_1080p_path):
                 raise RuntimeError(f"Rendered 1080p file is corrupted or incomplete; aborting upload. ({burned_1080p_path})")
 
-            dood_url = None
+            vidmoly_url = None
+            streamhg_url = None
             streamtape_url = None
+            dood_url = None
             rendered_720p_path = None
+            active_servers = {}
 
             # Subbed Downscaling (720p Generation) & Multi-Server Upload
             if preferred_quality in ("both", "multi", "all"):
@@ -2633,15 +3083,26 @@ def run_pipeline(movie_title: str, release_year: str = None, imdb_id: str = None
                 rendered_720p_path = os.path.join(file_dir, final_720p_filename)
                 downscale_to_720p(burned_1080p_path, rendered_720p_path)
 
-                # Upload output_1080p.mp4 to Doodstream
-                log("UPLOAD", "Uploading 1080p Hardsub to Doodstream (Server 1)...")
-                dood_url = upload_to_doodstream(burned_1080p_path)
+                # Server 1: Vidmoly (1080p HLS)
+                log("UPLOAD", "Uploading 1080p Hardsub to Vidmoly (Server 1 - Primary 1080p HLS)...")
+                try: vidmoly_url = upload_to_vidmoly(burned_1080p_path)
+                except Exception as e: log("UPLOAD", f"⚠️ Vidmoly error: {e}")
 
-                # Upload output_720p.mp4 to Streamtape
-                log("UPLOAD", "Uploading 720p Downscaled Hardsub to Streamtape (Server 2)...")
-                streamtape_url = upload_to_streamtape(rendered_720p_path)
+                # Server 2: StreamHG (720p Fast Adaptive)
+                log("UPLOAD", "Uploading 720p Downscaled Hardsub to StreamHG (Server 2 - Fast 720p Adaptive)...")
+                try: streamhg_url = upload_to_streamhg(rendered_720p_path)
+                except Exception as e: log("UPLOAD", f"⚠️ StreamHG error: {e}")
 
-                primary_embed = dood_url or streamtape_url
+                # Server 3: Streamtape (720p High Speed)
+                log("UPLOAD", "Uploading 720p Downscaled Hardsub to Streamtape (Server 3 - High Speed)...")
+                try: streamtape_url = upload_to_streamtape(rendered_720p_path)
+                except Exception as e: log("UPLOAD", f"⚠️ Streamtape error: {e}")
+
+                # Server 4: Doodstream (1080p Extra / Monetization)
+                log("UPLOAD", "Uploading 1080p Hardsub to Doodstream (Server 4 - Extra)...")
+                try: dood_url = upload_to_doodstream(burned_1080p_path)
+                except Exception as e: log("UPLOAD", f"⚠️ Doodstream error: {e}")
+
                 active_quality = "1080p & 720p"
             elif "720" in preferred_quality.lower():
                 final_720p_filename = f"{clean_title}.{release_year_val}.720p.Arabic.Hardsub.mp4" if release_year_val else f"{clean_title}.720p.Arabic.Hardsub.mp4"
@@ -2652,15 +3113,47 @@ def run_pipeline(movie_title: str, release_year: str = None, imdb_id: str = None
                         os.remove(burned_1080p_path)
                         burned_1080p_path = None
                     except Exception: pass
-                log("UPLOAD", "Uploading 720p Hardsub to Streamtape (Server 2)...")
-                streamtape_url = upload_to_streamtape(rendered_720p_path)
-                primary_embed = streamtape_url
+
+                log("UPLOAD", "Uploading 720p Hardsub to Vidmoly (Server 1)...")
+                try: vidmoly_url = upload_to_vidmoly(rendered_720p_path)
+                except Exception as e: log("UPLOAD", f"⚠️ Vidmoly error: {e}")
+                log("UPLOAD", "Uploading 720p Hardsub to StreamHG (Server 2)...")
+                try: streamhg_url = upload_to_streamhg(rendered_720p_path)
+                except Exception as e: log("UPLOAD", f"⚠️ StreamHG error: {e}")
+                log("UPLOAD", "Uploading 720p Hardsub to Streamtape (Server 3)...")
+                try: streamtape_url = upload_to_streamtape(rendered_720p_path)
+                except Exception as e: log("UPLOAD", f"⚠️ Streamtape error: {e}")
+                log("UPLOAD", "Uploading 720p Hardsub to Doodstream (Server 4)...")
+                try: dood_url = upload_to_doodstream(rendered_720p_path)
+                except Exception as e: log("UPLOAD", f"⚠️ Doodstream error: {e}")
                 active_quality = "720p"
             else:
-                log("UPLOAD", "Uploading 1080p Hardsub to Doodstream (Server 1)...")
-                dood_url = upload_to_doodstream(burned_1080p_path)
-                primary_embed = dood_url
+                log("UPLOAD", "Uploading 1080p Hardsub to Vidmoly (Server 1)...")
+                try: vidmoly_url = upload_to_vidmoly(burned_1080p_path)
+                except Exception as e: log("UPLOAD", f"⚠️ Vidmoly error: {e}")
+                log("UPLOAD", "Uploading 1080p Hardsub to StreamHG (Server 2)...")
+                try: streamhg_url = upload_to_streamhg(burned_1080p_path)
+                except Exception as e: log("UPLOAD", f"⚠️ StreamHG error: {e}")
+                log("UPLOAD", "Uploading 1080p Hardsub to Streamtape (Server 3)...")
+                try: streamtape_url = upload_to_streamtape(burned_1080p_path)
+                except Exception as e: log("UPLOAD", f"⚠️ Streamtape error: {e}")
+                log("UPLOAD", "Uploading 1080p Hardsub to Doodstream (Server 4)...")
+                try: dood_url = upload_to_doodstream(burned_1080p_path)
+                except Exception as e: log("UPLOAD", f"⚠️ Doodstream error: {e}")
                 active_quality = "1080p"
+
+            if vidmoly_url:
+                active_servers["Vidmoly (1080p)" if "1080" in active_quality else "Vidmoly"] = vidmoly_url
+            if streamhg_url:
+                active_servers["StreamHG (720p)" if "720" in active_quality else "StreamHG"] = streamhg_url
+            if streamtape_url:
+                active_servers["Streamtape"] = streamtape_url
+            if dood_url:
+                active_servers["Doodstream"] = dood_url
+
+            primary_embed = vidmoly_url or streamhg_url or dood_url or streamtape_url
+            if not primary_embed:
+                raise RuntimeError("Failed to obtain embed URL from upload servers (Vidmoly, StreamHG, Doodstream, Streamtape all unavailable or failed).")
 
             # 6. Publish directly to Pantheon WordPress
             post_data = publish_movie_to_pantheon(
@@ -2668,7 +3161,10 @@ def run_pipeline(movie_title: str, release_year: str = None, imdb_id: str = None
                 primary_embed,
                 active_quality,
                 dood_embed=dood_url,
-                streamtape_embed=streamtape_url
+                streamtape_embed=streamtape_url,
+                vidmoly_embed=vidmoly_url,
+                streamhg_embed=streamhg_url,
+                active_servers=active_servers
             )
 
             print("\n" + "=" * 75)
