@@ -700,19 +700,45 @@ def fetch_tv_torrent(show_name: str, season_num: int, episode_num: int, imdb_id:
     if not valid_torrents:
         raise RuntimeError(f"No active torrents with seeders > 0 found for TV episode '{show_name} {episode_tag}'. Swarms are inactive across APIBay, EZTV, and indexers.")
 
-    # Quality Prioritization & Seeds Sorting: 1080p -> 720p, sorted descending by seeds count
-    def quality_tier(t):
-        title = t.get("title", "").lower()
+    # Release Filtering & Scoring: Prioritize WEB-DL/HDTV (500MB-2.5GB) over heavy REMUX/Bluray, sorted by seeds
+    def release_score(t):
+        title = t.get("title", "")
+        sz = t.get("size_bytes", 0)
+        seeds = t.get("seeds", 0)
         pref = preferred_quality.lower()
-        is_1080 = ("1080" in title or "1080p" in title)
-        is_720 = ("720" in title or "720p" in title)
-        if "1080" in pref or pref in ("both", "multi", "all"):
-            return 1 if is_1080 else (2 if is_720 else 3)
-        elif "720" in pref:
-            return 1 if is_720 else (2 if is_1080 else 3)
-        return 1 if is_1080 else (2 if is_720 else 3)
 
-    valid_torrents.sort(key=lambda t: (quality_tier(t), -t["seeds"]))
+        is_1080 = ("1080" in title.lower() or "1080p" in title.lower())
+        is_720 = ("720" in title.lower() or "720p" in title.lower())
+
+        if "1080" in pref or pref in ("both", "multi", "all"):
+            q_tier = 1 if is_1080 else (2 if is_720 else 3)
+        elif "720" in pref:
+            q_tier = 1 if is_720 else (2 if is_1080 else 3)
+        else:
+            q_tier = 1 if is_1080 else (2 if is_720 else 3)
+
+        # 1. Exclude or heavily penalize titles containing REMUX / Complete Bluray
+        is_remux = bool(re.search(r'\b(bdremux|remux|bluray-?remux|complete[\s._\-]*bluray)\b', title, re.IGNORECASE))
+        # 2. Prioritize standard web releases (WEB-DL, WEBRip, HDTV, x264, x265, HEVC)
+        is_web = bool(re.search(r'\b(web-?dl|web-?rip|web|hdtv|x264|h264|x265|h265|hevc)\b', title, re.IGNORECASE))
+        # 3. Prioritize file sizes between 500MB and 2.5GB
+        is_ideal_size = (500 * 1024 * 1024 <= sz <= 2500 * 1024 * 1024) if sz > 0 else is_web
+        is_oversized = (sz > 3500 * 1024 * 1024)
+
+        if is_remux:
+            type_tier = 4  # Heavy penalty - absolute last resort fallback
+        elif is_oversized:
+            type_tier = 3  # Very large release penalty
+        elif is_ideal_size and is_web:
+            type_tier = 1  # Top priority: standard web/broadcast release with ideal size
+        elif is_web or is_ideal_size:
+            type_tier = 2  # Good candidate
+        else:
+            type_tier = 2
+
+        return (type_tier, q_tier, -seeds)
+
+    valid_torrents.sort(key=release_score)
 
     top_candidates = []
     for vt in valid_torrents:
@@ -1292,8 +1318,8 @@ def apply_ass_style(ass_text: str) -> str:
         return ""
 
     target_style = (
-        "Style: Default,Noto Sans Arabic,72,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,"
-        "1,0,0,0,100,100,0,0,1,1.8,1.0,2,20,20,32,1"
+        "Style: Default,Noto Sans Arabic,80,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,"
+        "1,0,0,0,100,100,0,0,1,2.6,1.0,2,20,20,20,1"
     )
 
     # 1. Update or inject PlayResX, PlayResY, ScaledBorderAndShadow under [Script Info]
@@ -1371,7 +1397,7 @@ def convert_srt_to_ass(srt_text: str, srt_path: str = None) -> str:
         "",
         "[V4+ Styles]",
         "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
-        "Style: Default,Noto Sans Arabic,72,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,1,0,0,0,100,100,0,0,1,1.8,1.0,2,20,20,32,1",
+        "Style: Default,Noto Sans Arabic,80,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,1,0,0,0,100,100,0,0,1,2.6,1.0,2,20,20,20,1",
         "",
         "[Events]",
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
@@ -1514,7 +1540,7 @@ def detect_hardware_acceleration(force_refresh: bool = False) -> dict:
     1. Checks if an NVIDIA GPU is present and FFmpeg supports 'h264_nvenc'.
     2. If NVENC is available:
        - Mode: 'nvenc'
-       - 1080p Video Args: ["-c:v", "h264_nvenc", "-pix_fmt", "yuv420p", "-preset", "p4", "-cq", "23", "-spatial-aq", "1"]
+       - 1080p Video Args: ["-c:v", "h264_nvenc", "-pix_fmt", "yuv420p", "-preset", "p4", "-cq", "23", "-spatial-aq", "1", "-b:v", "3500k", "-maxrate", "4500k", "-bufsize", "7000k"]
        - 720p Downscale Args: ["-c:v", "h264_nvenc", "-pix_fmt", "yuv420p", "-preset", "p4", "-cq", "24"]
        - Log: [ACCEL] 🚀 Active GPU detected! Utilizing NVENC hardware acceleration.
     3. If NO GPU / NVENC unavailable (Lightning AI, standard VPS, local CPU machine):
@@ -1566,7 +1592,7 @@ def detect_hardware_acceleration(force_refresh: bool = False) -> dict:
         log("ACCEL", "🚀 Active GPU detected! Utilizing NVENC hardware acceleration.")
         _HW_ACCEL_CONFIG = {
             "mode": "nvenc",
-            "video_args_1080p": ["-c:v", "h264_nvenc", "-pix_fmt", "yuv420p", "-preset", "p4", "-cq", "23", "-spatial-aq", "1"],
+            "video_args_1080p": ["-c:v", "h264_nvenc", "-pix_fmt", "yuv420p", "-preset", "p4", "-cq", "23", "-spatial-aq", "1", "-b:v", "3500k", "-maxrate", "4500k", "-bufsize", "7000k"],
             "video_args_720p": ["-c:v", "h264_nvenc", "-pix_fmt", "yuv420p", "-preset", "p4", "-cq", "24"],
             "description": "NVIDIA NVENC Hardware Acceleration"
         }
@@ -1677,7 +1703,7 @@ def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
     v_args_1080p = accel["video_args_1080p"]
 
     fonts_dir_opt = ":fontsdir='/content/fonts'" if os.path.exists("/content/fonts") else ""
-    sub_style = "FontName=Noto Sans Arabic,FontSize=22,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=1.8,Shadow=1.0,MarginV=32,Alignment=2"
+    sub_style = "FontName=Noto Sans Arabic,FontSize=80,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=2.6,Shadow=1.0,MarginV=20,Alignment=2"
     sub_filter_rel = f"subtitles='sub.srt'{fonts_dir_opt}:force_style='{sub_style}'"
 
     ffmpeg_log = os.path.join(staging_dir, "ffmpeg_process.log")
@@ -1687,7 +1713,7 @@ def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
         "-i", ffmpeg_input,
         "-vf", sub_filter_rel,
         *v_args_1080p,
-        "-c:a", "copy",
+        "-c:a", "aac", "-b:a", "192k", "-ac", "2",
         "output_1080p.mp4"
     ]
 
@@ -1708,7 +1734,7 @@ def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
             "-i", ffmpeg_input,
             "-vf", sub_filter_abs,
             *v_args_1080p,
-            "-c:a", "copy",
+            "-c:a", "aac", "-b:a", "192k", "-ac", "2",
             "output_1080p.mp4"
         ]
         with open(ffmpeg_log, "a", encoding="utf-8") as lf:
@@ -1723,7 +1749,7 @@ def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
                 "-i", ffmpeg_input,
                 "-vf", sub_filter_abs,
                 *cpu_args_1080p,
-                "-c:a", "copy",
+                "-c:a", "aac", "-b:a", "192k", "-ac", "2",
                 "output_1080p.mp4"
             ]
             with open(ffmpeg_log, "a", encoding="utf-8") as lf:
@@ -1788,7 +1814,7 @@ def downscale_to_720p(input_1080p_path: str, output_720p_path: str = None) -> st
         "-i", input_1080p_path,
         "-vf", "scale=-2:720",
         *v_args_720p,
-        "-c:a", "copy",
+        "-c:a", "aac", "-b:a", "192k", "-ac", "2",
         output_720p_path
     ]
     with open(ffmpeg_log, "a", encoding="utf-8") as lf:
@@ -1803,7 +1829,7 @@ def downscale_to_720p(input_1080p_path: str, output_720p_path: str = None) -> st
             "-i", input_1080p_path,
             "-vf", "scale=-2:720",
             *cpu_args_720p,
-            "-c:a", "copy",
+            "-c:a", "aac", "-b:a", "192k", "-ac", "2",
             output_720p_path
         ]
         with open(ffmpeg_log, "a", encoding="utf-8") as lf:
