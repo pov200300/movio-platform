@@ -982,34 +982,78 @@ def download_with_aria2(torrent_source: str, download_dir: str = DOWNLOAD_DIR, s
     log("ARIA2", f"✅ Download verified intact: {os.path.basename(target_video)} ({file_size_mb:.2f} MB)")
     return target_video
 
+def sanitize_subtitle_text(text: str) -> str:
+    """
+    Sanitize decoded subtitle text to eliminate libass rendering artifacts and tofu boxes ([]):
+    - Purges directional and bidirectional formatting marks (LRM, RLM, LRE, RLE, PDF, LRO, RLO, LRI, RLI, FSI, PDI, ALM).
+    - Purges zero-width spaces/joiners/non-joiners and BOM marks (\u200b, \u200c, \u200d, \ufeff, \ufffe).
+    - Purges Unicode replacement glyphs (\ufffd) that render as tofu boxes ([]).
+    - Normalizes line endings to standard Unix \n and strips null bytes.
+    """
+    if not text:
+        return ""
+    text = text.replace("\x00", "").replace("\r\n", "\n").replace("\r", "\n")
+    tofu_and_bidi_pattern = re.compile(
+        r"[\u200e\u200f\u202a-\u202e\u200b\u200c\u200d\ufeff\ufffe\ufffd\u061c\u2066-\u2069]"
+    )
+    return tofu_and_bidi_pattern.sub("", text)
+
+
 def decode_arabic_subtitle_bytes(raw_bytes: bytes) -> str:
     """
-    Robust Arabic-aware subtitle decoder testing candidate encodings in strict priority:
-    ['utf-8-sig', 'utf-8', 'cp1256', 'windows-1256', 'iso-8859-6', 'latin1']
-    Verifies that decoded text actually contains Arabic characters (Unicode block 0600-06FF).
+    Robust Arabic-aware subtitle decoder testing candidate encodings:
+    ['utf-8', 'utf-8-sig', 'windows-1256', 'cp1256', 'iso-8859-6', 'latin1']
+    Prioritizes strict multibyte UTF-8 / UTF-8-sig. For legacy 8-bit Arabic codepages,
+    scores candidates by Arabic character density and penalizes mojibake/mismapped Latin accents.
     """
     if not raw_bytes:
         return ""
 
     raw_bytes = raw_bytes.replace(b"\x00", b"")
 
-    # List encodings to try in order of priority
-    candidates = ['utf-8-sig', 'utf-8', 'cp1256', 'windows-1256', 'iso-8859-6', 'latin1']
-
-    for enc in candidates:
+    # 1. Multi-byte UTF-8 strictly validated first
+    for utf_enc in ['utf-8', 'utf-8-sig']:
         try:
-            text = raw_bytes.decode(enc)
-            # Verify that decoded text actually contains Arabic characters (Unicode block 0600-06FF)
+            text = raw_bytes.decode(utf_enc)
             if re.search(r'[\u0600-\u06FF]', text):
                 return text
         except (UnicodeDecodeError, LookupError):
+            pass
+
+    # 2. Legacy 8-bit Arabic codepages: evaluate and score candidates
+    best_text = ""
+    best_score = -999999
+
+    def _score(t: str) -> int:
+        ar_count = len(re.findall(r'[\u0600-\u06FF]', t))
+        if ar_count == 0:
+            return -1
+        # Mis-decoded bytes from other codepages produce Latin accents (\u00C0-\u00FF) or replacement chars
+        bad_latin = len(re.findall(r'[\u00C0-\u00FF]', t))
+        replacements = t.count("\ufffd")
+        return ar_count - (bad_latin * 3) - (replacements * 5)
+
+    legacy_candidates = ['windows-1256', 'cp1256', 'iso-8859-6', 'latin1']
+    for enc in legacy_candidates:
+        try:
+            candidate_text = raw_bytes.decode(enc)
+            score = _score(candidate_text)
+            if score > best_score:
+                best_score = score
+                best_text = candidate_text
+        except (UnicodeDecodeError, LookupError):
             continue
 
+    if best_score > 0 and best_text:
+        return best_text
+
     # Fallback with error replacement if nothing matched cleanly
-    try:
-        return raw_bytes.decode('cp1256', errors='replace')
-    except Exception:
-        return raw_bytes.decode('utf-8', errors='replace')
+    for enc in ['windows-1256', 'cp1256', 'utf-8']:
+        try:
+            return raw_bytes.decode(enc, errors='replace')
+        except Exception:
+            pass
+    return ""
 
 
 def fix_arabic_mojibake(text: str) -> str:
@@ -1039,29 +1083,79 @@ def fix_arabic_mojibake(text: str) -> str:
     return text
 
 
+def sanitize_subtitle_file(input_srt_path: str, output_srt_path: str = None) -> str:
+    """
+    Auto-detect and decode incoming SRT files across common encodings:
+    ('utf-8', 'utf-8-sig', 'windows-1256', 'cp1256', 'iso-8859-6').
+    Applies mojibake auto-repair and comprehensive bidi/tofu-box Unicode cleaning.
+    Re-saves the sanitized file strictly in clean UTF-8 without BOM.
+    """
+    if not input_srt_path or not os.path.exists(input_srt_path):
+        return None
+    if not output_srt_path:
+        output_srt_path = input_srt_path
+
+    with open(input_srt_path, "rb") as f:
+        raw_bytes = f.read()
+
+    decoded = decode_arabic_subtitle_bytes(raw_bytes)
+    repaired = fix_arabic_mojibake(decoded)
+    clean_text = sanitize_subtitle_text(repaired)
+
+    with open(output_srt_path, "w", encoding="utf-8", newline="\n") as f:
+        f.write(clean_text)
+
+    return output_srt_path
+
+
 def decode_arabic_subtitle(raw_bytes: bytes) -> tuple:
     """
-    Backwards-compatible wrapper returning (clean_text, detected_enc) using decode_arabic_subtitle_bytes and fix_arabic_mojibake.
+    Backwards-compatible wrapper returning (clean_text, detected_enc) using decode_arabic_subtitle_bytes,
+    fix_arabic_mojibake, and sanitize_subtitle_text.
     """
     if not raw_bytes:
         return None, None
 
     raw_bytes = raw_bytes.replace(b"\x00", b"")
-    candidates = ['utf-8-sig', 'utf-8', 'cp1256', 'windows-1256', 'iso-8859-6', 'latin1']
-    for enc in candidates:
+    for utf_enc in ['utf-8-sig', 'utf-8']:
         try:
-            text = raw_bytes.decode(enc)
+            text = raw_bytes.decode(utf_enc)
             if re.search(r'[\u0600-\u06FF]', text):
-                clean_text = fix_arabic_mojibake(text.lstrip("\ufeff").replace("\r\n", "\n").replace("\r", "\n"))
-                return clean_text, enc
+                return sanitize_subtitle_text(fix_arabic_mojibake(text)), utf_enc
+        except (UnicodeDecodeError, LookupError):
+            pass
+
+    def _score(t: str) -> int:
+        ar_count = len(re.findall(r'[\u0600-\u06FF]', t))
+        if ar_count == 0:
+            return -1
+        bad_latin = len(re.findall(r'[\u00C0-\u00FF]', t))
+        replacements = t.count("\ufffd")
+        return ar_count - (bad_latin * 3) - (replacements * 5)
+
+    best_text = ""
+    best_enc = None
+    best_score = -999999
+
+    for enc in ['windows-1256', 'cp1256', 'iso-8859-6', 'latin1']:
+        try:
+            candidate_text = raw_bytes.decode(enc)
+            score = _score(candidate_text)
+            if score > best_score:
+                best_score = score
+                best_text = candidate_text
+                best_enc = enc
         except (UnicodeDecodeError, LookupError):
             continue
 
+    if best_score > 0 and best_text:
+        return sanitize_subtitle_text(fix_arabic_mojibake(best_text)), best_enc
+
     fallback = decode_arabic_subtitle_bytes(raw_bytes)
     if fallback:
-        clean_text = fix_arabic_mojibake(fallback.lstrip("\ufeff").replace("\r\n", "\n").replace("\r", "\n"))
+        clean_text = sanitize_subtitle_text(fix_arabic_mojibake(fallback))
         if re.search(r'[\u0600-\u06FF]', clean_text):
-            return clean_text, "cp1256"
+            return clean_text, "windows-1256"
 
     return None, None
 
@@ -1069,7 +1163,7 @@ def decode_arabic_subtitle(raw_bytes: bytes) -> tuple:
 def read_subtitle_file_robustly(file_path: str) -> str:
     """
     Read subtitle file as binary bytes, decode using robust Arabic-aware decoder,
-    and apply fix_arabic_mojibake auto-repair.
+    apply fix_arabic_mojibake auto-repair, and purge bidi/tofu-box artifacts.
     """
     if not file_path or not os.path.exists(file_path):
         return ""
@@ -1078,7 +1172,8 @@ def read_subtitle_file_robustly(file_path: str) -> str:
         raw_bytes = f.read()
 
     decoded = decode_arabic_subtitle_bytes(raw_bytes)
-    return fix_arabic_mojibake(decoded)
+    repaired = fix_arabic_mojibake(decoded)
+    return sanitize_subtitle_text(repaired)
 
 # =============================================================================
 # 4. ARABIC-ONLY SUBTITLES & FFMPEG HARDSUBBING (BURN-IN)
@@ -1193,7 +1288,7 @@ def download_subtitles_for_imdb(imdb_id: str, output_dir: str = DOWNLOAD_DIR) ->
                     for fname in sorted_files:
                         f_bytes = z.read(fname)
                         raw_text = decode_arabic_subtitle_bytes(f_bytes)
-                        clean_text = fix_arabic_mojibake(raw_text)
+                        clean_text = sanitize_subtitle_text(fix_arabic_mojibake(raw_text))
                         ar_count = len(re.findall(r'[\u0600-\u06FF]', clean_text))
                         if ar_count >= 30:
                             out_srt = os.path.join(subs_dir, f"{imdb_id}_ara.srt")
@@ -1242,7 +1337,7 @@ def download_subtitles_for_tv_episode(imdb_id: str, season_num: int, episode_num
                         sub_resp = requests.get(dl_url, headers=HEADERS, timeout=12)
                         if sub_resp.status_code == 200 and len(sub_resp.content) > 100:
                             raw_text = decode_arabic_subtitle_bytes(sub_resp.content)
-                            clean_text = fix_arabic_mojibake(raw_text)
+                            clean_text = sanitize_subtitle_text(fix_arabic_mojibake(raw_text))
                             arabic_count = len(re.findall(r'[\u0600-\u06FF]', clean_text))
                             if arabic_count >= 30:
                                 out_srt = os.path.join(subs_dir, f"{imdb_id}_{episode_tag}_ara.srt")
@@ -1336,8 +1431,8 @@ def apply_ass_style(ass_text: str) -> str:
         return ""
 
     target_style = (
-        "Style: Default,Noto Sans Arabic,80,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,"
-        "1,0,0,0,100,100,0,0,1,2.6,1.0,2,20,20,20,1"
+        "Style: Default,Noto Sans Arabic,24,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,"
+        "1,0,0,0,100,100,0,0,1,1.4,0.8,2,20,20,28,1"
     )
 
     # 1. Update or inject PlayResX, PlayResY, ScaledBorderAndShadow under [Script Info]
@@ -1397,9 +1492,9 @@ def convert_srt_to_ass(srt_text: str, srt_path: str = None) -> str:
     if not srt_text:
         return ""
 
-    # ── 0. Pre-clean: strip null bytes, BOMs, normalize newlines, purge bidi marks ──
+    # ── 0. Pre-clean: strip null bytes, BOMs, normalize newlines, purge bidi marks & tofu glyphs ──
     raw_text = srt_text.replace("\x00", "").lstrip("\ufeff\ufffe").replace("\r\n", "\n").replace("\r", "\n")
-    bidi_pattern = re.compile(r"[\u200e\u200f\u061c\u200b-\u200d\u202a-\u202e\u2066-\u2069\ufeff]")
+    bidi_pattern = re.compile(r"[\u200e\u200f\u061c\u200b-\u200d\u202a-\u202e\u2066-\u2069\ufeff\ufffe\ufffd]")
     cleaned = bidi_pattern.sub("", raw_text).strip()
     if not cleaned:
         return ""
@@ -1415,7 +1510,7 @@ def convert_srt_to_ass(srt_text: str, srt_path: str = None) -> str:
         "",
         "[V4+ Styles]",
         "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
-        "Style: Default,Noto Sans Arabic,80,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,1,0,0,0,100,100,0,0,1,2.6,1.0,2,20,20,20,1",
+        "Style: Default,Noto Sans Arabic,24,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,1,0,0,0,100,100,0,0,1,1.4,0.8,2,20,20,28,1",
         "",
         "[Events]",
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
@@ -1648,16 +1743,16 @@ def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
         log("HARDSUB", "ffmpeg not found in PATH; skipping hardsubbing and using raw video.")
         return video_path
 
-    # 1. Force UTF-8 conversion testing priority encodings and auto-repair mojibake
+    # 1. Force UTF-8 conversion testing priority encodings, auto-repair mojibake, and purge bidi/tofu artifacts
     try:
         clean_sub_text = read_subtitle_file_robustly(srt_path)
-        clean_sub_text = fix_arabic_mojibake(clean_sub_text)
+        clean_sub_text = sanitize_subtitle_text(fix_arabic_mojibake(clean_sub_text))
         ar_count = len(re.findall(r'[\u0600-\u06FF]', clean_sub_text)) if clean_sub_text else 0
         if not clean_sub_text or ar_count < 30:
             log("HARDSUB", f"⚠️ Subtitle '{srt_path}' contains fewer than 30 Arabic Unicode characters ({ar_count}); using original video.")
             return video_path
 
-        log("SUBS", f"ℹ️ Subtitle decoded robustly, auto-repaired, and verified ({ar_count} Arabic characters).")
+        log("SUBS", f"ℹ️ Subtitle decoded robustly, auto-repaired, sanitized, and verified ({ar_count} Arabic characters).")
     except Exception as e:
         log("HARDSUB", f"⚠️ Error validating subtitle encoding: {e}; falling back to raw video.")
         return video_path
@@ -1682,6 +1777,7 @@ def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
     try:
         with open(staged_clean_srt, 'w', encoding='utf-8', newline='\n') as csf:
             csf.write(clean_sub_text)
+        sanitize_subtitle_file(staged_clean_srt, staged_clean_srt)
     except Exception as e:
         log("HARDSUB", f"⚠️ Could not write {staged_clean_srt}: {e}")
         staged_clean_srt = srt_path
@@ -1721,7 +1817,7 @@ def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
     v_args_1080p = accel["video_args_1080p"]
 
     fonts_dir_opt = ":fontsdir='/content/fonts'" if os.path.exists("/content/fonts") else ""
-    sub_style = "FontName=Noto Sans Arabic,FontSize=80,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=2.6,Shadow=1.0,MarginV=20,Alignment=2"
+    sub_style = "FontName=Noto Sans Arabic,Bold=1,FontSize=24,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=1.4,Shadow=0.8,MarginV=28,Alignment=2"
     sub_filter_rel = f"subtitles='sub.srt'{fonts_dir_opt}:force_style='{sub_style}'"
 
     # 4K Pre-scale Detection: If source is > 1080p (2160p/4K/UHD), prepend scale filter
