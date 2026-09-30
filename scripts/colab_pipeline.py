@@ -623,43 +623,62 @@ def fetch_tv_torrent(show_name: str, season_num: int, episode_num: int, imdb_id:
     except Exception as e:
         log("TV", f"APIBay query notice: {e}")
 
-    # 2. Secondary Indexer: EZTV API across active mirrors
-    if not matched_torrents:
-        mirrors = ["https://eztvx.to", "https://eztv.re", "https://eztv.wf", "https://eztv.tf", "https://eztv.yt"]
-        num_imdb = re.sub(r'[^0-9]', '', imdb_id) if imdb_id else ""
-        for mirror in mirrors:
-            if matched_torrents:
-                break
-            for page in range(1, 4):
-                params = {"limit": 100, "page": page}
-                if num_imdb:
-                    params["imdb_id"] = num_imdb
-                try:
-                    api_url = f"{mirror}/api/get-torrents"
-                    r = requests.get(api_url, params=params, headers=HEADERS, timeout=10)
-                    if r.status_code == 200:
-                        torrents = r.json().get("torrents", [])
-                        if not torrents:
-                            break
-                        for t in torrents:
-                            t_title = t.get("title", "")
-                            if not matches_show_tokens(show_name, t_title, season_num, episode_num):
-                                continue
-                            s_count = int(t.get("seeds") or 0)
-                            if s_count > 0:
-                                matched_torrents.append({
-                                    "title": t_title,
-                                    "torrent_url": t.get("torrent_url"),
-                                    "magnet_uri": t.get("magnet_url"),
-                                    "seeds": s_count,
-                                    "size_bytes": t.get("size_bytes") or 0,
-                                    "source": "EZTV"
-                                })
-                        if matched_torrents:
-                            log("TV", f"EZTV ({mirror}) resolved {len(matched_torrents)} releases for {episode_tag}")
-                            break
-                except Exception:
-                    continue
+    # 2. Secondary Indexer: EZTV API across active mirrors (always queried to merge swarms)
+    apibay_count = len(matched_torrents)
+    eztv_matched = []
+    mirrors = ["https://eztvx.to", "https://eztv.re", "https://eztv.wf", "https://eztv.tf", "https://eztv.yt"]
+    num_imdb = re.sub(r'[^0-9]', '', imdb_id) if imdb_id else ""
+    eztv_found = False
+    for mirror in mirrors:
+        if eztv_found:
+            break
+        for page in range(1, 4):
+            params = {"limit": 100, "page": page}
+            if num_imdb:
+                params["imdb_id"] = num_imdb
+            try:
+                api_url = f"{mirror}/api/get-torrents"
+                r = requests.get(api_url, params=params, headers=HEADERS, timeout=10)
+                if r.status_code == 200:
+                    torrents = r.json().get("torrents", [])
+                    if not torrents:
+                        break
+                    for t in torrents:
+                        t_title = t.get("title", "")
+                        if not matches_show_tokens(show_name, t_title, season_num, episode_num):
+                            continue
+                        s_count = int(t.get("seeds") or 0)
+                        if s_count > 0:
+                            eztv_matched.append({
+                                "title": t_title,
+                                "torrent_url": t.get("torrent_url"),
+                                "magnet_uri": t.get("magnet_url"),
+                                "seeds": s_count,
+                                "size_bytes": t.get("size_bytes") or 0,
+                                "source": "EZTV"
+                            })
+                    if eztv_matched:
+                        log("TV", f"EZTV ({mirror}) resolved {len(eztv_matched)} releases for {episode_tag}")
+                        eztv_found = True
+                        break
+            except Exception:
+                continue
+
+    # Merge EZTV results, deduplicating by info_hash from magnet URIs
+    if eztv_matched:
+        existing_hashes = set()
+        for t in matched_torrents:
+            m_uri = t.get("magnet_uri") or ""
+            h = re.search(r'btih:([a-fA-F0-9]+)', m_uri)
+            if h:
+                existing_hashes.add(h.group(1).lower())
+        for et in eztv_matched:
+            et_uri = et.get("magnet_uri") or et.get("torrent_url") or ""
+            et_h = re.search(r'btih:([a-fA-F0-9]+)', et_uri)
+            if et_h and et_h.group(1).lower() in existing_hashes:
+                continue
+            matched_torrents.append(et)
+        log("TV", f"Merged swarm pool: {apibay_count} APIBay + {len(eztv_matched)} EZTV = {len(matched_torrents)} total candidates")
 
     # 3. Tertiary Fallback: Torrentio public stream provider
     if not matched_torrents and imdb_id:
@@ -928,7 +947,7 @@ def download_with_aria2(torrent_source: str, download_dir: str = DOWNLOAD_DIR, s
         torrent_source
     ]
     
-    proc = subprocess.run(cmd, capture_output=False, timeout=3600)
+    proc = subprocess.run(cmd, capture_output=False, timeout=5400)
     if proc.returncode != 0:
         raise RuntimeError(f"aria2c download failed with exit code {proc.returncode}")
 
@@ -1699,6 +1718,32 @@ def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
     sub_style = "FontName=Noto Sans Arabic,FontSize=80,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=2.6,Shadow=1.0,MarginV=20,Alignment=2"
     sub_filter_rel = f"subtitles='sub.srt'{fonts_dir_opt}:force_style='{sub_style}'"
 
+    # 4K Pre-scale Detection: If source is > 1080p (2160p/4K/UHD), prepend scale filter
+    # before subtitle burn-in to avoid libass rendering on 8.3M-pixel frames (boosts NVENC 0.4x -> 2.5x)
+    is_4k_source = False
+    try:
+        ffprobe_bin = shutil.which("ffprobe")
+        if ffprobe_bin:
+            probe_cmd = [ffprobe_bin, "-v", "error", "-select_streams", "v:0",
+                         "-show_entries", "stream=height", "-of", "csv=p=0", video_abs_path]
+            probe_result = subprocess.run(probe_cmd, capture_output=True, text=True, timeout=15)
+            if probe_result.returncode == 0:
+                source_height = int(probe_result.stdout.strip())
+                if source_height > 1100:
+                    is_4k_source = True
+                    log("HARDSUB", f"4K/UHD source detected ({source_height}p). Pre-scaling to 1080p before subtitle rendering.")
+    except Exception as e:
+        log("HARDSUB", f"ffprobe height detection notice: {e}")
+    # Filename-based fallback detection if ffprobe didn't detect
+    if not is_4k_source:
+        input_basename = os.path.basename(video_path).lower()
+        if any(tag in input_basename for tag in ["2160p", "2160", "4k", "uhd"]):
+            is_4k_source = True
+            log("HARDSUB", "4K/UHD source detected (filename match). Pre-scaling to 1080p before subtitle rendering.")
+
+    if is_4k_source:
+        sub_filter_rel = f"scale=-2:1080,subtitles='sub.srt'{fonts_dir_opt}:force_style='{sub_style}'"
+
     ffmpeg_log = os.path.join(staging_dir, "ffmpeg_process.log")
     log("HARDSUB", f"Burning Arabic subtitles into 1080p frames ({accel['description']}): output_1080p.mp4 in {staging_dir}...")
     cmd = [
@@ -1712,7 +1757,7 @@ def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
     ]
 
     with open(ffmpeg_log, "w", encoding="utf-8") as lf:
-        proc = subprocess.run(cmd, stdout=lf, stderr=lf, cwd=staging_dir, timeout=5400)
+        proc = subprocess.run(cmd, stdout=lf, stderr=lf, cwd=staging_dir, timeout=9000)
     if proc.returncode != 0:
         err_snippet = ""
         try:
@@ -1722,7 +1767,10 @@ def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
             pass
         log("HARDSUB", f"Notice on relative subtitle filter ({proc.returncode}): {err_snippet}. Retrying with escaped absolute subtitle path...")
         sub_abs_escaped = os.path.abspath(staged_clean_srt).replace("\\", "/").replace(":", r"\:")
-        sub_filter_abs = f"subtitles='{sub_abs_escaped}'{fonts_dir_opt}:force_style='{sub_style}'"
+        if is_4k_source:
+            sub_filter_abs = f"scale=-2:1080,subtitles='{sub_abs_escaped}'{fonts_dir_opt}:force_style='{sub_style}'"
+        else:
+            sub_filter_abs = f"subtitles='{sub_abs_escaped}'{fonts_dir_opt}:force_style='{sub_style}'"
         cmd_abs = [
             "ffmpeg", "-y", "-nostdin",
             "-i", ffmpeg_input,
@@ -1733,7 +1781,7 @@ def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
             "output_1080p.mp4"
         ]
         with open(ffmpeg_log, "a", encoding="utf-8") as lf:
-            proc = subprocess.run(cmd_abs, stdout=lf, stderr=lf, cwd=staging_dir, timeout=5400)
+            proc = subprocess.run(cmd_abs, stdout=lf, stderr=lf, cwd=staging_dir, timeout=9000)
 
         # Dynamic fallback: If NVENC failed, try multi-threaded CPU libx264 as safeguard
         if proc.returncode != 0 and accel["mode"] == "nvenc":
@@ -1749,7 +1797,7 @@ def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
                 "output_1080p.mp4"
             ]
             with open(ffmpeg_log, "a", encoding="utf-8") as lf:
-                proc = subprocess.run(cmd_cpu, stdout=lf, stderr=lf, cwd=staging_dir, timeout=5400)
+                proc = subprocess.run(cmd_cpu, stdout=lf, stderr=lf, cwd=staging_dir, timeout=9000)
 
         if proc.returncode != 0:
             err_snippet = ""
@@ -1815,7 +1863,7 @@ def downscale_to_720p(input_1080p_path: str, output_720p_path: str = None) -> st
         output_720p_path
     ]
     with open(ffmpeg_log, "a", encoding="utf-8") as lf:
-        proc = subprocess.run(cmd, stdout=lf, stderr=lf, timeout=5400)
+        proc = subprocess.run(cmd, stdout=lf, stderr=lf, timeout=9000)
 
     # Dynamic fallback: if NVENC failed, try multi-threaded CPU libx264
     if proc.returncode != 0 and accel["mode"] == "nvenc":
@@ -1831,7 +1879,7 @@ def downscale_to_720p(input_1080p_path: str, output_720p_path: str = None) -> st
             output_720p_path
         ]
         with open(ffmpeg_log, "a", encoding="utf-8") as lf:
-            proc = subprocess.run(cmd_cpu, stdout=lf, stderr=lf, timeout=5400)
+            proc = subprocess.run(cmd_cpu, stdout=lf, stderr=lf, timeout=9000)
 
     if proc.returncode != 0:
         err_snippet = ""
