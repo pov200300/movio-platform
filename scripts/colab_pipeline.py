@@ -72,8 +72,8 @@ TMDB_API_KEY = os.getenv("TMDB_API_KEY") or _COLAB_TMDB_KEY or ""
 DOODSTREAM_API_KEY = os.getenv("DOODSTREAM_API_KEY") or _COLAB_DOOD_KEY or ""
 DOODSTREAM_API_BASE = "https://doodapi.com/api"
 
-STREAMTAPE_LOGIN = os.getenv("STREAMTAPE_LOGIN") or _COLAB_STREAMTAPE_LOGIN or "06340d1c727a30bcd350"
-STREAMTAPE_KEY = os.getenv("STREAMTAPE_KEY") or _COLAB_STREAMTAPE_KEY or "BbWjjoderVTyxx2"
+STREAMTAPE_LOGIN = os.getenv("STREAMTAPE_LOGIN") or _COLAB_STREAMTAPE_LOGIN or ""
+STREAMTAPE_KEY = os.getenv("STREAMTAPE_KEY") or _COLAB_STREAMTAPE_KEY or ""
 STREAMTAPE_API_BASE = "https://api.streamtape.com"
 
 DOWNLOAD_DIR = "/content/download" if os.path.exists("/content") else os.path.abspath("./downloads")
@@ -700,55 +700,52 @@ def fetch_tv_torrent(show_name: str, season_num: int, episode_num: int, imdb_id:
     if not valid_torrents:
         raise RuntimeError(f"No active torrents with seeders > 0 found for TV episode '{show_name} {episode_tag}'. Swarms are inactive across APIBay, EZTV, and indexers.")
 
-    # Release Filtering & Scoring: Prioritize WEB-DL/HDTV (500MB-2.5GB) over heavy REMUX/Bluray, sorted by seeds
-    def release_score(t):
+    # Resolution-First Scoring & Candidate Ordering:
+    # 1. 1080p releases (non-REMUX) occupy the absolute top tier (+100,000 pts), sorted by seeders descending.
+    # 2. Releases of any other resolution must NEVER take precedence over an available 1080p candidate.
+    # 3. Higher resolutions (2160p / 4K / REMUX) act strictly as secondary fallbacks (+50,000 pts).
+    # 4. 720p (+25,000 pts) and SD (+10,000 pts) act as lower fallbacks.
+    def release_score(t: dict) -> int:
         title = t.get("title", "")
-        sz = t.get("size_bytes", 0)
-        seeds = t.get("seeds", 0)
-        pref = preferred_quality.lower()
+        seeds = int(t.get("seeds", 0) or 0)
 
-        is_1080 = ("1080" in title.lower() or "1080p" in title.lower())
-        is_720 = ("720" in title.lower() or "720p" in title.lower())
-
-        if "1080" in pref or pref in ("both", "multi", "all"):
-            q_tier = 1 if is_1080 else (2 if is_720 else 3)
-        elif "720" in pref:
-            q_tier = 1 if is_720 else (2 if is_1080 else 3)
-        else:
-            q_tier = 1 if is_1080 else (2 if is_720 else 3)
-
-        # 1. Exclude or heavily penalize titles containing REMUX / Complete Bluray
         is_remux = bool(re.search(r'\b(bdremux|remux|bluray-?remux|complete[\s._\-]*bluray)\b', title, re.IGNORECASE))
-        # 2. Prioritize standard web releases (WEB-DL, WEBRip, HDTV, x264, x265, HEVC)
-        is_web = bool(re.search(r'\b(web-?dl|web-?rip|web|hdtv|x264|h264|x265|h265|hevc)\b', title, re.IGNORECASE))
-        # 3. Prioritize file sizes between 500MB and 2.5GB
-        is_ideal_size = (500 * 1024 * 1024 <= sz <= 2500 * 1024 * 1024) if sz > 0 else is_web
-        is_oversized = (sz > 3500 * 1024 * 1024)
+        is_4k = bool(re.search(r'\b(2160p?|4k|uhd)\b', title, re.IGNORECASE))
+        is_1080 = bool(re.search(r'\b(1080p?|1920x1080)\b', title, re.IGNORECASE))
+        is_720 = bool(re.search(r'\b(720p?|1280x720)\b', title, re.IGNORECASE))
 
-        if is_remux:
-            type_tier = 4  # Heavy penalty - absolute last resort fallback
-        elif is_oversized:
-            type_tier = 3  # Very large release penalty
-        elif is_ideal_size and is_web:
-            type_tier = 1  # Top priority: standard web/broadcast release with ideal size
-        elif is_web or is_ideal_size:
-            type_tier = 2  # Good candidate
+        if is_1080 and not is_remux and not is_4k:
+            base_score = 100000
+        elif is_4k or is_remux:
+            base_score = 50000
+        elif is_720:
+            base_score = 25000
         else:
-            type_tier = 2
+            base_score = 10000
 
-        return (type_tier, q_tier, -seeds)
+        # Cap seeders bonus at 10,000 so seed counts can never cross resolution tiers
+        return base_score + min(seeds, 10000)
 
-    valid_torrents.sort(key=release_score)
+    valid_torrents.sort(key=release_score, reverse=True)
 
     top_candidates = []
     for vt in valid_torrents:
-        q = "1080p" if "1080" in vt.get("title", "").lower() else ("720p" if "720" in vt.get("title", "").lower() else "HDTV")
+        vt_title = vt.get("title", "").lower()
+        if "2160" in vt_title or "4k" in vt_title or "uhd" in vt_title:
+            q = "4K/2160p"
+        elif "1080" in vt_title:
+            q = "1080p"
+        elif "720" in vt_title:
+            q = "720p"
+        else:
+            q = "HDTV"
         top_candidates.append({
             "title": vt.get("title"),
             "quality": q,
             "torrent_url": vt.get("torrent_url"),
             "magnet_uri": vt.get("magnet_uri"),
             "seeds": vt.get("seeds", 0),
+            "size": vt.get("size", "Unknown"),
             "size_bytes": vt.get("size_bytes", 0),
             "source": vt.get("source", "Unknown")
         })
@@ -931,7 +928,7 @@ def download_with_aria2(torrent_source: str, download_dir: str = DOWNLOAD_DIR, s
         torrent_source
     ]
     
-    proc = subprocess.run(cmd, capture_output=False)
+    proc = subprocess.run(cmd, capture_output=False, timeout=3600)
     if proc.returncode != 0:
         raise RuntimeError(f"aria2c download failed with exit code {proc.returncode}")
 
@@ -1236,12 +1233,8 @@ def download_subtitles_for_tv_episode(imdb_id: str, season_num: int, episode_num
     except Exception as e:
         log("SUBS", f"OpenSubtitles v3 notice: {e}")
 
-    # 2. Fallback: try download_subtitles_for_imdb (if general subtitle exists)
-    fallback = download_subtitles_for_imdb(imdb_id, output_dir)
-    if fallback:
-        return fallback
-
-    log("SUBS", f"⚠️ No Arabic subtitles found for {imdb_id} {episode_tag}.")
+    # 2. No valid subtitle found in OpenSubtitles v3
+    log("SUBS", f"⚠️ No valid Arabic subtitles found for TV episode {imdb_id} {episode_tag}. Skipping subtitle download.")
     return None
 
 def probe_video_properties(video_path: str) -> tuple[int, float]:
@@ -1711,6 +1704,7 @@ def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
     cmd = [
         "ffmpeg", "-y", "-nostdin",
         "-i", ffmpeg_input,
+        "-map", "0:v:0", "-map", "0:a:0?",
         "-vf", sub_filter_rel,
         *v_args_1080p,
         "-c:a", "aac", "-b:a", "192k", "-ac", "2",
@@ -1718,7 +1712,7 @@ def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
     ]
 
     with open(ffmpeg_log, "w", encoding="utf-8") as lf:
-        proc = subprocess.run(cmd, stdout=lf, stderr=lf, cwd=staging_dir)
+        proc = subprocess.run(cmd, stdout=lf, stderr=lf, cwd=staging_dir, timeout=5400)
     if proc.returncode != 0:
         err_snippet = ""
         try:
@@ -1732,13 +1726,14 @@ def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
         cmd_abs = [
             "ffmpeg", "-y", "-nostdin",
             "-i", ffmpeg_input,
+            "-map", "0:v:0", "-map", "0:a:0?",
             "-vf", sub_filter_abs,
             *v_args_1080p,
             "-c:a", "aac", "-b:a", "192k", "-ac", "2",
             "output_1080p.mp4"
         ]
         with open(ffmpeg_log, "a", encoding="utf-8") as lf:
-            proc = subprocess.run(cmd_abs, stdout=lf, stderr=lf, cwd=staging_dir)
+            proc = subprocess.run(cmd_abs, stdout=lf, stderr=lf, cwd=staging_dir, timeout=5400)
 
         # Dynamic fallback: If NVENC failed, try multi-threaded CPU libx264 as safeguard
         if proc.returncode != 0 and accel["mode"] == "nvenc":
@@ -1747,13 +1742,14 @@ def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
             cmd_cpu = [
                 "ffmpeg", "-y", "-nostdin",
                 "-i", ffmpeg_input,
+                "-map", "0:v:0", "-map", "0:a:0?",
                 "-vf", sub_filter_abs,
                 *cpu_args_1080p,
                 "-c:a", "aac", "-b:a", "192k", "-ac", "2",
                 "output_1080p.mp4"
             ]
             with open(ffmpeg_log, "a", encoding="utf-8") as lf:
-                proc = subprocess.run(cmd_cpu, stdout=lf, stderr=lf, cwd=staging_dir)
+                proc = subprocess.run(cmd_cpu, stdout=lf, stderr=lf, cwd=staging_dir, timeout=5400)
 
         if proc.returncode != 0:
             err_snippet = ""
@@ -1812,13 +1808,14 @@ def downscale_to_720p(input_1080p_path: str, output_720p_path: str = None) -> st
     cmd = [
         "ffmpeg", "-y", "-nostdin",
         "-i", input_1080p_path,
+        "-map", "0:v:0", "-map", "0:a:0?",
         "-vf", "scale=-2:720",
         *v_args_720p,
         "-c:a", "aac", "-b:a", "192k", "-ac", "2",
         output_720p_path
     ]
     with open(ffmpeg_log, "a", encoding="utf-8") as lf:
-        proc = subprocess.run(cmd, stdout=lf, stderr=lf)
+        proc = subprocess.run(cmd, stdout=lf, stderr=lf, timeout=5400)
 
     # Dynamic fallback: if NVENC failed, try multi-threaded CPU libx264
     if proc.returncode != 0 and accel["mode"] == "nvenc":
@@ -1827,13 +1824,14 @@ def downscale_to_720p(input_1080p_path: str, output_720p_path: str = None) -> st
         cmd_cpu = [
             "ffmpeg", "-y", "-nostdin",
             "-i", input_1080p_path,
+            "-map", "0:v:0", "-map", "0:a:0?",
             "-vf", "scale=-2:720",
             *cpu_args_720p,
             "-c:a", "aac", "-b:a", "192k", "-ac", "2",
             output_720p_path
         ]
         with open(ffmpeg_log, "a", encoding="utf-8") as lf:
-            proc = subprocess.run(cmd_cpu, stdout=lf, stderr=lf)
+            proc = subprocess.run(cmd_cpu, stdout=lf, stderr=lf, timeout=5400)
 
     if proc.returncode != 0:
         err_snippet = ""
@@ -2359,295 +2357,293 @@ def run_pipeline(movie_title: str, release_year: str = None, imdb_id: str = None
     parsed = parse_media_item(movie_title)
     is_episode = parsed.get("is_episode", False)
 
-    if is_episode:
-        log("PIPELINE", f"📺 TV Episode detected: {parsed['show_name']} Season {parsed['season_number']} Episode {parsed['episode_number']} ({parsed['episode_tag']})")
-        # 1. Fetch TV Metadata from TMDB
-        target_imdb = imdb_id or parsed.get("imdb_id")
-        meta = fetch_tv_metadata(parsed["show_name"], parsed["season_number"], parsed["episode_number"], target_imdb, TMDB_API_KEY)
-        meta["is_episode"] = True
-        meta["show_name"] = parsed["show_name"]
-        meta["season_number"] = parsed["season_number"]
-        meta["episode_number"] = parsed["episode_number"]
-        meta["episode_tag"] = parsed["episode_tag"]
+    raw_video_path = None
+    burned_1080p_path = None
+    rendered_720p_path = None
+    arabic_srt_path = None
 
-        # 2. Fetch TV Torrent Source candidates
-        target_imdb = meta.get("imdb_id") or target_imdb
-        fetch_quality = "1080p" if preferred_quality in ("both", "multi", "all") else preferred_quality
-        torrent_info = fetch_tv_torrent(parsed["show_name"], parsed["season_number"], parsed["episode_number"], target_imdb, fetch_quality)
-        candidates = torrent_info.get("candidates") or [torrent_info]
+    try:
+        if is_episode:
+            log("PIPELINE", f"📺 TV Episode detected: {parsed['show_name']} Season {parsed['season_number']} Episode {parsed['episode_number']} ({parsed['episode_tag']})")
+            # 1. Fetch TV Metadata from TMDB
+            target_imdb = imdb_id or parsed.get("imdb_id")
+            meta = fetch_tv_metadata(parsed["show_name"], parsed["season_number"], parsed["episode_number"], target_imdb, TMDB_API_KEY)
+            meta["is_episode"] = True
+            meta["show_name"] = parsed["show_name"]
+            meta["season_number"] = parsed["season_number"]
+            meta["episode_number"] = parsed["episode_number"]
+            meta["episode_tag"] = parsed["episode_tag"]
 
-        # 3. High-Speed aria2c Download with Candidate Fallback Loop (up to 3 tries)
-        raw_video_path = None
-        max_tries = min(3, len(candidates))
-        for cand_idx in range(max_tries):
-            candidate = candidates[cand_idx]
-            download_source = candidate.get("torrent_url") or candidate.get("magnet_uri")
-            cand_title = candidate.get("title", "Unknown")
-            cand_seeds = candidate.get("seeds", 0)
-            log("PIPELINE", f"Attempting download candidate {cand_idx + 1}/{max_tries}: '{cand_title}' ({cand_seeds} seeds)...")
-            try:
-                raw_video_path = download_with_aria2(download_source, DOWNLOAD_DIR, STAGING_DIR)
-                if raw_video_path and os.path.exists(raw_video_path):
-                    log("PIPELINE", f"✅ Successfully downloaded video candidate {cand_idx + 1}: {os.path.basename(raw_video_path)}")
-                    break
-            except Exception as e:
-                log("PIPELINE", f"⚠️ Torrent download failed, trying next candidate release... (Candidate {cand_idx + 1} error: {e})")
-                sanitize_download_dir(DOWNLOAD_DIR, STAGING_DIR)
+            # 2. Fetch TV Torrent Source candidates
+            target_imdb = meta.get("imdb_id") or target_imdb
+            fetch_quality = "1080p" if preferred_quality in ("both", "multi", "all") else preferred_quality
+            torrent_info = fetch_tv_torrent(parsed["show_name"], parsed["season_number"], parsed["episode_number"], target_imdb, fetch_quality)
+            candidates = torrent_info.get("candidates") or [torrent_info]
 
-        if not raw_video_path or not os.path.exists(raw_video_path):
-            raise RuntimeError(f"All {max_tries} torrent candidates failed to download for TV episode '{parsed['show_name']} {parsed['episode_tag']}'.")
-
-        # 4. Fetch Arabic Subtitles (.srt) targeting exact Season & Episode
-        arabic_srt_path = download_subtitles_for_tv_episode(target_imdb, parsed["season_number"], parsed["episode_number"], DOWNLOAD_DIR)
-
-        # 5. Burn Arabic Subtitles directly into 1080p video frames once
-        burned_1080p_path = burn_arabic_subtitles(raw_video_path, arabic_srt_path)
-
-        # Subtitle status evaluation
-        if not arabic_srt_path:
-            arabic_sub_status = "None (No Arabic Subtitle Found)"
-        elif (burned_1080p_path != raw_video_path and 
-              os.path.exists(burned_1080p_path) and 
-              os.path.getsize(burned_1080p_path) > 0):
-            arabic_sub_status = "Burned In"
-        else:
-            arabic_sub_status = "Failed (Uploaded Original Unsubbed)"
-
-        log("PIPELINE", f"Subtitling status: {arabic_sub_status}")
-
-        # Disk Safety - Immediately delete raw source video once 1080p hardsub completes
-        if raw_video_path and os.path.exists(raw_video_path) and burned_1080p_path != raw_video_path:
-            try:
-                os.remove(raw_video_path)
-                log("CLEANUP", f"Immediately deleted raw source video to free disk: {os.path.basename(raw_video_path)}")
-                raw_video_path = None
-            except Exception as e:
-                log("CLEANUP", f"Notice removing raw video: {e}")
-
-        # Dynamically rename 1080p video with show title and episode tag
-        clean_show = re.sub(r'[^\w\s-]', '', parsed["show_name"]).strip().replace(' ', '.')
-        file_dir = os.path.dirname(burned_1080p_path)
-        final_1080p_filename = f"{clean_show}.{parsed['episode_tag']}.1080p.Arabic.Hardsub.mp4"
-        final_1080p_filepath = os.path.join(file_dir, final_1080p_filename)
-
-        if os.path.exists(burned_1080p_path):
-            if burned_1080p_path != final_1080p_filepath:
-                if os.path.exists(final_1080p_filepath):
-                    try: os.remove(final_1080p_filepath)
-                    except Exception: pass
-                os.rename(burned_1080p_path, final_1080p_filepath)
-                log("PIPELINE", f"Renamed 1080p upload file: {final_1080p_filename}")
-            burned_1080p_path = final_1080p_filepath
-
-        if not verify_video_integrity(burned_1080p_path):
-            raise RuntimeError(f"Rendered 1080p file is corrupted or incomplete; aborting upload. ({burned_1080p_path})")
-
-        dood_url = None
-        streamtape_url = None
-        rendered_720p_path = None
-
-        if preferred_quality in ("both", "multi", "all"):
-            final_720p_filename = f"{clean_show}.{parsed['episode_tag']}.720p.Arabic.Hardsub.mp4"
-            rendered_720p_path = os.path.join(file_dir, final_720p_filename)
-            downscale_to_720p(burned_1080p_path, rendered_720p_path)
-
-            log("UPLOAD", "Uploading 1080p Hardsub to Doodstream (Server 1)...")
-            dood_url = upload_to_doodstream(burned_1080p_path)
-
-            log("UPLOAD", "Uploading 720p Downscaled Hardsub to Streamtape (Server 2)...")
-            streamtape_url = upload_to_streamtape(rendered_720p_path)
-
-            primary_embed = dood_url or streamtape_url
-            active_quality = "1080p & 720p"
-        elif "720" in preferred_quality.lower():
-            final_720p_filename = f"{clean_show}.{parsed['episode_tag']}.720p.Arabic.Hardsub.mp4"
-            rendered_720p_path = os.path.join(file_dir, final_720p_filename)
-            downscale_to_720p(burned_1080p_path, rendered_720p_path)
-            if os.path.exists(burned_1080p_path):
+            # 3. High-Speed aria2c Download with Candidate Fallback Loop (up to 3 tries)
+            max_tries = min(3, len(candidates))
+            for cand_idx in range(max_tries):
+                candidate = candidates[cand_idx]
+                download_source = candidate.get("torrent_url") or candidate.get("magnet_uri")
+                cand_title = candidate.get("title", "Unknown")
+                cand_seeds = candidate.get("seeds", 0)
+                log("PIPELINE", f"Attempting download candidate {cand_idx + 1}/{max_tries}: '{cand_title}' ({cand_seeds} seeds)...")
                 try:
-                    os.remove(burned_1080p_path)
-                    burned_1080p_path = None
-                except Exception: pass
-            log("UPLOAD", "Uploading 720p Hardsub to Streamtape (Server 2)...")
-            streamtape_url = upload_to_streamtape(rendered_720p_path)
-            primary_embed = streamtape_url
-            active_quality = "720p"
+                    raw_video_path = download_with_aria2(download_source, DOWNLOAD_DIR, STAGING_DIR)
+                    if raw_video_path and os.path.exists(raw_video_path):
+                        log("PIPELINE", f"✅ Successfully downloaded video candidate {cand_idx + 1}: {os.path.basename(raw_video_path)}")
+                        break
+                except Exception as e:
+                    log("PIPELINE", f"⚠️ Torrent download failed, trying next candidate release... (Candidate {cand_idx + 1} error: {e})")
+                    sanitize_download_dir(DOWNLOAD_DIR, STAGING_DIR)
+
+            if not raw_video_path or not os.path.exists(raw_video_path):
+                raise RuntimeError(f"All {max_tries} torrent candidates failed to download for TV episode '{parsed['show_name']} {parsed['episode_tag']}'.")
+
+            # 4. Fetch Arabic Subtitles (.srt) targeting exact Season & Episode
+            arabic_srt_path = download_subtitles_for_tv_episode(target_imdb, parsed["season_number"], parsed["episode_number"], DOWNLOAD_DIR)
+
+            # 5. Burn Arabic Subtitles directly into 1080p video frames once
+            burned_1080p_path = burn_arabic_subtitles(raw_video_path, arabic_srt_path)
+
+            # Subtitle status evaluation
+            if not arabic_srt_path:
+                arabic_sub_status = "None (No Arabic Subtitle Found)"
+            elif (burned_1080p_path != raw_video_path and 
+                  os.path.exists(burned_1080p_path) and 
+                  os.path.getsize(burned_1080p_path) > 0):
+                arabic_sub_status = "Burned In"
+            else:
+                arabic_sub_status = "Failed (Uploaded Original Unsubbed)"
+
+            log("PIPELINE", f"Subtitling status: {arabic_sub_status}")
+
+            # Disk Safety - Immediately delete raw source video once 1080p hardsub completes
+            if raw_video_path and os.path.exists(raw_video_path) and burned_1080p_path != raw_video_path:
+                try:
+                    os.remove(raw_video_path)
+                    log("CLEANUP", f"Immediately deleted raw source video to free disk: {os.path.basename(raw_video_path)}")
+                    raw_video_path = None
+                except Exception as e:
+                    log("CLEANUP", f"Notice removing raw video: {e}")
+
+            # Dynamically rename 1080p video with show title and episode tag
+            clean_show = re.sub(r'[^\w\s-]', '', parsed["show_name"]).strip().replace(' ', '.')
+            file_dir = os.path.dirname(burned_1080p_path)
+            final_1080p_filename = f"{clean_show}.{parsed['episode_tag']}.1080p.Arabic.Hardsub.mp4"
+            final_1080p_filepath = os.path.join(file_dir, final_1080p_filename)
+
+            if os.path.exists(burned_1080p_path):
+                if burned_1080p_path != final_1080p_filepath:
+                    if os.path.exists(final_1080p_filepath):
+                        try: os.remove(final_1080p_filepath)
+                        except Exception: pass
+                    os.rename(burned_1080p_path, final_1080p_filepath)
+                    log("PIPELINE", f"Renamed 1080p upload file: {final_1080p_filename}")
+                burned_1080p_path = final_1080p_filepath
+
+            if not verify_video_integrity(burned_1080p_path):
+                raise RuntimeError(f"Rendered 1080p file is corrupted or incomplete; aborting upload. ({burned_1080p_path})")
+
+            dood_url = None
+            streamtape_url = None
+
+            if preferred_quality in ("both", "multi", "all"):
+                final_720p_filename = f"{clean_show}.{parsed['episode_tag']}.720p.Arabic.Hardsub.mp4"
+                rendered_720p_path = os.path.join(file_dir, final_720p_filename)
+                downscale_to_720p(burned_1080p_path, rendered_720p_path)
+
+                log("UPLOAD", "Uploading 1080p Hardsub to Doodstream (Server 1)...")
+                dood_url = upload_to_doodstream(burned_1080p_path)
+
+                log("UPLOAD", "Uploading 720p Downscaled Hardsub to Streamtape (Server 2)...")
+                streamtape_url = upload_to_streamtape(rendered_720p_path)
+
+                primary_embed = dood_url or streamtape_url
+                active_quality = "1080p & 720p"
+            elif "720" in preferred_quality.lower():
+                final_720p_filename = f"{clean_show}.{parsed['episode_tag']}.720p.Arabic.Hardsub.mp4"
+                rendered_720p_path = os.path.join(file_dir, final_720p_filename)
+                downscale_to_720p(burned_1080p_path, rendered_720p_path)
+                if os.path.exists(burned_1080p_path):
+                    try:
+                        os.remove(burned_1080p_path)
+                        burned_1080p_path = None
+                    except Exception: pass
+                log("UPLOAD", "Uploading 720p Hardsub to Streamtape (Server 2)...")
+                streamtape_url = upload_to_streamtape(rendered_720p_path)
+                primary_embed = streamtape_url
+                active_quality = "720p"
+            else:
+                log("UPLOAD", "Uploading 1080p Hardsub to Doodstream (Server 1)...")
+                dood_url = upload_to_doodstream(burned_1080p_path)
+                primary_embed = dood_url
+                active_quality = "1080p"
+
+            # 6. Publish TV Episode post to Pantheon WordPress
+            post_data = publish_movie_to_pantheon(
+                meta,
+                primary_embed,
+                active_quality,
+                dood_embed=dood_url,
+                streamtape_embed=streamtape_url,
+                is_episode=True,
+                episode_data=parsed
+            )
+
+            print("\n" + "=" * 75)
+            print("  TV EPISODE PIPELINE COMPLETED SUCCESSFULLY!")
+            print(f"  Show:       {meta['title']} ({parsed['episode_tag']})")
+            print(f"  Rating:     ★ {meta.get('imdb_rating') or meta.get('rating')}")
+            print(f"  Quality:    {active_quality}")
+            print(f"  Arabic Sub: {arabic_sub_status}")
+            print(f"  Server 1:   {dood_url or 'N/A'} (DoodStream 1080p)")
+            print(f"  Server 2:   {streamtape_url or 'N/A'} (Streamtape 720p)")
+            print(f"  Primary:    {primary_embed}")
+            print(f"  Live Post:  {post_data.get('link')}")
+            print(f"  Next.js:    {NEXTJS_URL}/movie/{post_data.get('slug')}")
+            print("=" * 75)
+            return post_data
+
         else:
-            log("UPLOAD", "Uploading 1080p Hardsub to Doodstream (Server 1)...")
-            dood_url = upload_to_doodstream(burned_1080p_path)
-            primary_embed = dood_url
-            active_quality = "1080p"
+            # Standard Movie Pipeline
+            # 1. Fetch TMDB Metadata
+            meta = fetch_tmdb_metadata(movie_title, release_year, imdb_id)
 
-        # 6. Publish TV Episode post to Pantheon WordPress
-        post_data = publish_movie_to_pantheon(
-            meta,
-            primary_embed,
-            active_quality,
-            dood_embed=dood_url,
-            streamtape_embed=streamtape_url,
-            is_episode=True,
-            episode_data=parsed
-        )
+            # 2. Fetch 1080p YTS Torrent Source
+            target_imdb = meta.get("imdb_id") or imdb_id
+            fetch_quality = "1080p" if preferred_quality in ("both", "multi", "all") else preferred_quality
+            torrent_info = fetch_yts_torrent(meta["title"], meta["year"], target_imdb, fetch_quality)
 
-        # 7. Disk Safety Cleanup
+            # Synchronize authoritative IMDb rating from YTS if present
+            if torrent_info.get("imdb_rating"):
+                meta["rating"] = torrent_info["imdb_rating"]
+                meta["imdb_rating"] = torrent_info["imdb_rating"]
+                log("PIPELINE", f"Synced authoritative IMDb rating from YTS: ★ {meta['imdb_rating']}")
+
+            # 3. High-Speed aria2c Download with Pre-Sanitization
+            download_source = torrent_info["torrent_url"] or torrent_info["magnet_uri"]
+            raw_video_path = download_with_aria2(download_source)
+
+            # 4. Fetch Arabic Subtitles (.srt)
+            arabic_srt_path = download_subtitles_for_imdb(target_imdb, DOWNLOAD_DIR)
+
+            # 5. Burn Arabic Subtitles directly into 1080p video frames once
+            burned_1080p_path = burn_arabic_subtitles(raw_video_path, arabic_srt_path)
+
+            # Accurate subtitle status evaluation
+            if not arabic_srt_path:
+                arabic_sub_status = "None (No Arabic Subtitle Found)"
+            elif (burned_1080p_path != raw_video_path and 
+                  os.path.exists(burned_1080p_path) and 
+                  os.path.getsize(burned_1080p_path) > 0):
+                arabic_sub_status = "Burned In"
+            else:
+                arabic_sub_status = "Failed (Uploaded Original Unsubbed)"
+
+            log("PIPELINE", f"Subtitling status: {arabic_sub_status}")
+
+            # Disk Safety - Immediately delete raw source video once 1080p hardsub completes
+            if raw_video_path and os.path.exists(raw_video_path) and burned_1080p_path != raw_video_path:
+                try:
+                    os.remove(raw_video_path)
+                    log("CLEANUP", f"Immediately deleted raw source video to free disk: {os.path.basename(raw_video_path)}")
+                    raw_video_path = None
+                except Exception as e:
+                    log("CLEANUP", f"Notice removing raw video: {e}")
+
+            # Dynamically rename 1080p video so streaming hosts register clean movie title
+            title_en = meta.get("title") or movie_title or "Movie"
+            release_year_val = meta.get("year") or ""
+            clean_title = re.sub(r'[^\w\s-]', '', title_en).strip().replace(' ', '.')
+            file_dir = os.path.dirname(burned_1080p_path)
+            if release_year_val:
+                final_1080p_filename = f"{clean_title}.{release_year_val}.1080p.Arabic.Hardsub.mp4"
+            else:
+                final_1080p_filename = f"{clean_title}.1080p.Arabic.Hardsub.mp4"
+            final_1080p_filepath = os.path.join(file_dir, final_1080p_filename)
+
+            if os.path.exists(burned_1080p_path):
+                if burned_1080p_path != final_1080p_filepath:
+                    if os.path.exists(final_1080p_filepath):
+                        try: os.remove(final_1080p_filepath)
+                        except Exception: pass
+                    os.rename(burned_1080p_path, final_1080p_filepath)
+                    log("PIPELINE", f"Renamed 1080p upload file: {final_1080p_filename}")
+                burned_1080p_path = final_1080p_filepath
+
+            if not verify_video_integrity(burned_1080p_path):
+                raise RuntimeError(f"Rendered 1080p file is corrupted or incomplete; aborting upload. ({burned_1080p_path})")
+
+            dood_url = None
+            streamtape_url = None
+            rendered_720p_path = None
+
+            # Subbed Downscaling (720p Generation) & Multi-Server Upload
+            if preferred_quality in ("both", "multi", "all"):
+                final_720p_filename = f"{clean_title}.{release_year_val}.720p.Arabic.Hardsub.mp4" if release_year_val else f"{clean_title}.720p.Arabic.Hardsub.mp4"
+                rendered_720p_path = os.path.join(file_dir, final_720p_filename)
+                downscale_to_720p(burned_1080p_path, rendered_720p_path)
+
+                # Upload output_1080p.mp4 to Doodstream
+                log("UPLOAD", "Uploading 1080p Hardsub to Doodstream (Server 1)...")
+                dood_url = upload_to_doodstream(burned_1080p_path)
+
+                # Upload output_720p.mp4 to Streamtape
+                log("UPLOAD", "Uploading 720p Downscaled Hardsub to Streamtape (Server 2)...")
+                streamtape_url = upload_to_streamtape(rendered_720p_path)
+
+                primary_embed = dood_url or streamtape_url
+                active_quality = "1080p & 720p"
+            elif "720" in preferred_quality.lower():
+                final_720p_filename = f"{clean_title}.{release_year_val}.720p.Arabic.Hardsub.mp4" if release_year_val else f"{clean_title}.720p.Arabic.Hardsub.mp4"
+                rendered_720p_path = os.path.join(file_dir, final_720p_filename)
+                downscale_to_720p(burned_1080p_path, rendered_720p_path)
+                if os.path.exists(burned_1080p_path):
+                    try:
+                        os.remove(burned_1080p_path)
+                        burned_1080p_path = None
+                    except Exception: pass
+                log("UPLOAD", "Uploading 720p Hardsub to Streamtape (Server 2)...")
+                streamtape_url = upload_to_streamtape(rendered_720p_path)
+                primary_embed = streamtape_url
+                active_quality = "720p"
+            else:
+                log("UPLOAD", "Uploading 1080p Hardsub to Doodstream (Server 1)...")
+                dood_url = upload_to_doodstream(burned_1080p_path)
+                primary_embed = dood_url
+                active_quality = "1080p"
+
+            # 6. Publish directly to Pantheon WordPress
+            post_data = publish_movie_to_pantheon(
+                meta,
+                primary_embed,
+                active_quality,
+                dood_embed=dood_url,
+                streamtape_embed=streamtape_url
+            )
+
+            print("\n" + "=" * 75)
+            print("  MOVIE PIPELINE COMPLETED SUCCESSFULLY!")
+            print(f"  Title:      {meta['title']} ({meta['year']})")
+            print(f"  Rating:     ★ {meta.get('imdb_rating') or meta.get('rating')}")
+            print(f"  Quality:    {active_quality}")
+            print(f"  Arabic Sub: {arabic_sub_status}")
+            print(f"  Server 1:   {dood_url or 'N/A'} (DoodStream 1080p)")
+            print(f"  Server 2:   {streamtape_url or 'N/A'} (Streamtape 720p)")
+            print(f"  Primary:    {primary_embed}")
+            print(f"  Live Post:  {post_data.get('link')}")
+            print(f"  Next.js:    {NEXTJS_URL}/movie/{post_data.get('slug')}")
+            print("=" * 75)
+            return post_data
+    finally:
+        # 7. Guaranteed Ephemeral Disk Cleanup
         cleanup_targets = [raw_video_path, burned_1080p_path, rendered_720p_path, arabic_srt_path]
         for p in cleanup_targets:
             if p and os.path.exists(p):
                 try:
                     os.remove(p)
-                    log("CLEANUP", f"Immediately deleted rendered/temporary file: {os.path.basename(p)}")
-                except Exception:
-                    pass
-
-        staging_dir = "/content/staging" if os.path.exists("/content") else os.path.abspath("./staging_temp")
-        if os.path.exists(staging_dir):
-            for f in os.listdir(staging_dir):
-                fp = os.path.join(staging_dir, f)
-                try:
-                    if os.path.islink(fp) or os.path.isfile(fp):
-                        os.remove(fp)
-                except Exception:
-                    pass
-
-        print("\n" + "=" * 75)
-        print("  TV EPISODE PIPELINE COMPLETED SUCCESSFULLY!")
-        print(f"  Show:       {meta['title']} ({parsed['episode_tag']})")
-        print(f"  Rating:     ★ {meta.get('imdb_rating') or meta.get('rating')}")
-        print(f"  Quality:    {active_quality}")
-        print(f"  Arabic Sub: {arabic_sub_status}")
-        print(f"  Server 1:   {dood_url or 'N/A'} (DoodStream 1080p)")
-        print(f"  Server 2:   {streamtape_url or 'N/A'} (Streamtape 720p)")
-        print(f"  Primary:    {primary_embed}")
-        print(f"  Live Post:  {post_data.get('link')}")
-        print(f"  Next.js:    {NEXTJS_URL}/movie/{post_data.get('slug')}")
-        print("=" * 75)
-        return post_data
-
-    else:
-        # Standard Movie Pipeline
-        # 1. Fetch TMDB Metadata
-        meta = fetch_tmdb_metadata(movie_title, release_year, imdb_id)
-
-        # 2. Fetch 1080p YTS Torrent Source
-        target_imdb = meta.get("imdb_id") or imdb_id
-        fetch_quality = "1080p" if preferred_quality in ("both", "multi", "all") else preferred_quality
-        torrent_info = fetch_yts_torrent(meta["title"], meta["year"], target_imdb, fetch_quality)
-
-        # Synchronize authoritative IMDb rating from YTS if present
-        if torrent_info.get("imdb_rating"):
-            meta["rating"] = torrent_info["imdb_rating"]
-            meta["imdb_rating"] = torrent_info["imdb_rating"]
-            log("PIPELINE", f"Synced authoritative IMDb rating from YTS: ★ {meta['imdb_rating']}")
-
-        # 3. High-Speed aria2c Download with Pre-Sanitization
-        download_source = torrent_info["torrent_url"] or torrent_info["magnet_uri"]
-        raw_video_path = download_with_aria2(download_source)
-
-        # 4. Fetch Arabic Subtitles (.srt)
-        arabic_srt_path = download_subtitles_for_imdb(target_imdb, DOWNLOAD_DIR)
-
-        # 5. Burn Arabic Subtitles directly into 1080p video frames once
-        burned_1080p_path = burn_arabic_subtitles(raw_video_path, arabic_srt_path)
-
-        # Accurate subtitle status evaluation
-        if not arabic_srt_path:
-            arabic_sub_status = "None (No Arabic Subtitle Found)"
-        elif (burned_1080p_path != raw_video_path and 
-              os.path.exists(burned_1080p_path) and 
-              os.path.getsize(burned_1080p_path) > 0):
-            arabic_sub_status = "Burned In"
-        else:
-            arabic_sub_status = "Failed (Uploaded Original Unsubbed)"
-
-        log("PIPELINE", f"Subtitling status: {arabic_sub_status}")
-
-        # Disk Safety - Immediately delete raw source video once 1080p hardsub completes
-        if raw_video_path and os.path.exists(raw_video_path) and burned_1080p_path != raw_video_path:
-            try:
-                os.remove(raw_video_path)
-                log("CLEANUP", f"Immediately deleted raw source video to free disk: {os.path.basename(raw_video_path)}")
-                raw_video_path = None
-            except Exception as e:
-                log("CLEANUP", f"Notice removing raw video: {e}")
-
-        # Dynamically rename 1080p video so streaming hosts register clean movie title
-        title_en = meta.get("title") or movie_title or "Movie"
-        release_year_val = meta.get("year") or ""
-        clean_title = re.sub(r'[^\w\s-]', '', title_en).strip().replace(' ', '.')
-        file_dir = os.path.dirname(burned_1080p_path)
-        if release_year_val:
-            final_1080p_filename = f"{clean_title}.{release_year_val}.1080p.Arabic.Hardsub.mp4"
-        else:
-            final_1080p_filename = f"{clean_title}.1080p.Arabic.Hardsub.mp4"
-        final_1080p_filepath = os.path.join(file_dir, final_1080p_filename)
-
-        if os.path.exists(burned_1080p_path):
-            if burned_1080p_path != final_1080p_filepath:
-                if os.path.exists(final_1080p_filepath):
-                    try: os.remove(final_1080p_filepath)
-                    except Exception: pass
-                os.rename(burned_1080p_path, final_1080p_filepath)
-                log("PIPELINE", f"Renamed 1080p upload file: {final_1080p_filename}")
-            burned_1080p_path = final_1080p_filepath
-
-        if not verify_video_integrity(burned_1080p_path):
-            raise RuntimeError(f"Rendered 1080p file is corrupted or incomplete; aborting upload. ({burned_1080p_path})")
-
-        dood_url = None
-        streamtape_url = None
-        rendered_720p_path = None
-
-        # Subbed Downscaling (720p Generation) & Multi-Server Upload
-        if preferred_quality in ("both", "multi", "all"):
-            final_720p_filename = f"{clean_title}.{release_year_val}.720p.Arabic.Hardsub.mp4" if release_year_val else f"{clean_title}.720p.Arabic.Hardsub.mp4"
-            rendered_720p_path = os.path.join(file_dir, final_720p_filename)
-            downscale_to_720p(burned_1080p_path, rendered_720p_path)
-
-            # Upload output_1080p.mp4 to Doodstream
-            log("UPLOAD", "Uploading 1080p Hardsub to Doodstream (Server 1)...")
-            dood_url = upload_to_doodstream(burned_1080p_path)
-
-            # Upload output_720p.mp4 to Streamtape
-            log("UPLOAD", "Uploading 720p Downscaled Hardsub to Streamtape (Server 2)...")
-            streamtape_url = upload_to_streamtape(rendered_720p_path)
-
-            primary_embed = dood_url or streamtape_url
-            active_quality = "1080p & 720p"
-        elif "720" in preferred_quality.lower():
-            final_720p_filename = f"{clean_title}.{release_year_val}.720p.Arabic.Hardsub.mp4" if release_year_val else f"{clean_title}.720p.Arabic.Hardsub.mp4"
-            rendered_720p_path = os.path.join(file_dir, final_720p_filename)
-            downscale_to_720p(burned_1080p_path, rendered_720p_path)
-            if os.path.exists(burned_1080p_path):
-                try:
-                    os.remove(burned_1080p_path)
-                    burned_1080p_path = None
-                except Exception: pass
-            log("UPLOAD", "Uploading 720p Hardsub to Streamtape (Server 2)...")
-            streamtape_url = upload_to_streamtape(rendered_720p_path)
-            primary_embed = streamtape_url
-            active_quality = "720p"
-        else:
-            log("UPLOAD", "Uploading 1080p Hardsub to Doodstream (Server 1)...")
-            dood_url = upload_to_doodstream(burned_1080p_path)
-            primary_embed = dood_url
-            active_quality = "1080p"
-
-        # 6. Publish directly to Pantheon WordPress
-        post_data = publish_movie_to_pantheon(
-            meta,
-            primary_embed,
-            active_quality,
-            dood_embed=dood_url,
-            streamtape_embed=streamtape_url
-        )
-
-        # 7. Disk Safety Cleanup
-        cleanup_targets = [raw_video_path, burned_1080p_path, rendered_720p_path, arabic_srt_path]
-        for p in cleanup_targets:
-            if p and os.path.exists(p):
-                try:
-                    os.remove(p)
-                    log("CLEANUP", f"Immediately deleted rendered/temporary file: {os.path.basename(p)}")
+                    log("CLEANUP", f"Purged temporary/staged file: {os.path.basename(p)}")
                 except Exception:
                     pass
 
@@ -2659,22 +2655,23 @@ def run_pipeline(movie_title: str, release_year: str = None, imdb_id: str = None
                 try:
                     if os.path.islink(fp) or os.path.isfile(fp):
                         os.remove(fp)
+                    elif os.path.isdir(fp):
+                        shutil.rmtree(fp, ignore_errors=True)
                 except Exception:
                     pass
 
-        print("\n" + "=" * 75)
-        print("  MOVIE PIPELINE COMPLETED SUCCESSFULLY!")
-        print(f"  Title:      {meta['title']} ({meta['year']})")
-        print(f"  Rating:     ★ {meta.get('imdb_rating') or meta.get('rating')}")
-        print(f"  Quality:    {active_quality}")
-        print(f"  Arabic Sub: {arabic_sub_status}")
-        print(f"  Server 1:   {dood_url or 'N/A'} (DoodStream 1080p)")
-        print(f"  Server 2:   {streamtape_url or 'N/A'} (Streamtape 720p)")
-        print(f"  Primary:    {primary_embed}")
-        print(f"  Live Post:  {post_data.get('link')}")
-        print(f"  Next.js:    {NEXTJS_URL}/movie/{post_data.get('slug')}")
-        print("=" * 75)
-        return post_data
+        # Purge download directory leftovers
+        download_dir = "/content/download" if os.path.exists("/content") else os.path.abspath("./downloads")
+        if os.path.exists(download_dir):
+            for f in os.listdir(download_dir):
+                fp = os.path.join(download_dir, f)
+                try:
+                    if os.path.islink(fp) or os.path.isfile(fp):
+                        os.remove(fp)
+                    elif os.path.isdir(fp):
+                        shutil.rmtree(fp, ignore_errors=True)
+                except Exception:
+                    pass
 
 # =============================================================================
 # BATCH / BULK PROCESSING ENGINE
