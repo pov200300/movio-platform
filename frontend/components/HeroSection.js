@@ -12,6 +12,14 @@ export default function HeroSection({ featuredMovie }) {
     backdropUrl = featuredMovie.posterUrl;
   }
 
+  const featuredTitle = (
+    featuredMovie?.title?.rendered ||
+    featuredMovie?.title ||
+    featuredMovie?.cleanTitle ||
+    featuredMovie?.rawTitle ||
+    'السينما العالمية'
+  ).replace(/<[^>]+>/g, '').trim();
+
   return (
     <div className={styles.heroBanner}>
       {/* Background Image with Rich Multi-Stop Vignette */}
@@ -19,7 +27,7 @@ export default function HeroSection({ featuredMovie }) {
         {backdropUrl && (
           <Image
             src={backdropUrl}
-            alt="EGYMAX Cinema Backdrop"
+            alt={`بوستر فيلم ${featuredTitle}`}
             fill
             priority
             sizes="100vw"

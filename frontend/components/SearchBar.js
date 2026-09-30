@@ -192,7 +192,7 @@ export default function SearchBar({ isMobile = false, onNavigate }) {
                       <div className={styles.thumbWrapper}>
                         <Image
                           src={item.poster_url || '/placeholder.svg'}
-                          alt={item.title_en || item.title_ar}
+                          alt={`بوستر فيلم ${item.title_ar || item.title_en || 'الفيلم'}`}
                           fill
                           sizes="42px"
                           className={styles.thumbImg}

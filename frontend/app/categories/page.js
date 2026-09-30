@@ -5,9 +5,29 @@ import styles from './categories.module.css';
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
+const siteUrl = (process.env.NEXT_PUBLIC_SITE_URL || 'https://egymax.vercel.app')
+  .replace(/^http:\/\//i, 'https://')
+  .replace(/\/+$/, '');
+
 export const metadata = {
-  title: 'جميع الأقسام والتصنيفات | EGYMAX',
-  description: 'تصفح كافة تصنيفات وأقسام الأفلام المتاحة على منصة EGYMAX.',
+  title: 'جميع أقسام وتصنيفات الأفلام والمسلسلات - EgyMax',
+  description: 'تصفح كافة تصنيفات وأقسام الأفلام والمسلسلات العالمية والعربية المترجمة بجودة فائقة 1080p و 4K على منصة EgyMax.',
+  alternates: {
+    canonical: `${siteUrl}/categories`,
+  },
+  openGraph: {
+    title: 'جميع أقسام وتصنيفات الأفلام والمسلسلات - EgyMax',
+    description: 'تصفح كافة تصنيفات وأقسام الأفلام والمسلسلات العالمية والعربية المترجمة بجودة فائقة 1080p و 4K على منصة EgyMax.',
+    url: `${siteUrl}/categories`,
+    siteName: 'EgyMax',
+    locale: 'ar_EG',
+    type: 'website',
+  },
+  twitter: {
+    card: 'summary_large_image',
+    title: 'جميع أقسام وتصنيفات الأفلام والمسلسلات - EgyMax',
+    description: 'تصفح كافة تصنيفات وأقسام الأفلام والمسلسلات العالمية والعربية المترجمة بجودة فائقة على منصة EgyMax.',
+  },
 };
 
 export default async function CategoriesPage() {

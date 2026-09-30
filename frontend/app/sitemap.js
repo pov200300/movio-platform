@@ -6,7 +6,7 @@ const WP_API_URL = (
 const BASE_URL = (
   process.env.NEXT_PUBLIC_SITE_URL ||
   'https://egymax.vercel.app'
-).replace(/\/+$/, '');
+).replace(/^http:\/\//i, 'https://').replace(/\/+$/, '');
 
 export const revalidate = 3600; // Revalidate sitemap at most once per hour
 

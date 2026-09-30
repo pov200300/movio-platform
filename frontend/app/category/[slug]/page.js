@@ -6,14 +6,55 @@ export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
 // Dynamic metadata
-export async function generateMetadata({ params }) {
-  const categories = await fetchAPI('categories?hide_empty=true');
-  const cat = categories?.find(c => c.slug === params.slug);
-  
-  return {
-    title: `أفلام قسم ${cat ? cat.name : 'التصنيف'} | EGYMAX`,
-    description: `شاهد أفضل وأحدث أفلام قسم ${cat ? cat.name : ''} مترجمة بجودة عالية على منصة EGYMAX.`,
-  };
+export async function generateMetadata({ params, searchParams }) {
+  const siteUrl = (process.env.NEXT_PUBLIC_SITE_URL || 'https://egymax.vercel.app')
+    .replace(/^http:\/\//i, 'https://')
+    .replace(/\/+$/, '');
+  const canonicalUrl = `${siteUrl}/category/${params.slug}`;
+
+  try {
+    const categories = await fetchAPI('categories?hide_empty=true');
+    const cat = categories?.find(c => c.slug === params.slug);
+    const genre = cat ? cat.name : (params.slug || 'السينما');
+    const pageNumber = searchParams?.page ? String(searchParams.page) : '1';
+
+    // Title format: "أفلام {genre} - EgyMax | صفحة {page_number}"
+    const title = `أفلام ${genre} - EgyMax | صفحة ${pageNumber}`;
+    const description = `تصفح وشاهد أفضل وأحدث أفلام ${genre} مترجمة بجودة عالية 1080p Full HD و 4K مجاناً على منصة EgyMax. صفحة ${pageNumber}.`.slice(0, 160);
+
+    const hasFilters = Boolean(searchParams?.page && Number(searchParams.page) > 1);
+
+    return {
+      title,
+      description,
+      alternates: {
+        canonical: canonicalUrl,
+      },
+      robots: hasFilters ? { index: false, follow: true } : { index: true, follow: true },
+      openGraph: {
+        title,
+        description,
+        url: canonicalUrl,
+        siteName: 'EgyMax',
+        locale: 'ar_EG',
+        type: 'website',
+      },
+      twitter: {
+        card: 'summary_large_image',
+        title,
+        description,
+      },
+    };
+  } catch (error) {
+    const pageNumber = searchParams?.page ? String(searchParams.page) : '1';
+    return {
+      title: `أفلام السينما - EgyMax | صفحة ${pageNumber}`,
+      description: 'شاهد أحدث الأفلام والمسلسلات الحصرية مترجمة بجودة عالية على منصة EgyMax.',
+      alternates: {
+        canonical: canonicalUrl,
+      },
+    };
+  }
 }
 
 export default async function CategoryPage({ params }) {

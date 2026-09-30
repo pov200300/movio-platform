@@ -89,15 +89,25 @@ export async function getCategories() {
 }
 
 /**
+ * Enforce HTTPS protocol on external URLs to eliminate SSL and mixed-content issues
+ */
+export function enforceHttps(url) {
+  if (!url || typeof url !== 'string') return url;
+  return url.replace(/^http:\/\//i, 'https://');
+}
+
+/**
  * Extract featured image URL from an embedded WP post object or fallback
  */
 export function getFeaturedImage(post) {
   if (!post) return '/placeholder.jpg';
+  let img = '/placeholder.jpg';
   if (post._embedded && post._embedded['wp:featuredmedia'] && post._embedded['wp:featuredmedia'][0]?.source_url) {
-    return post._embedded['wp:featuredmedia'][0].source_url;
+    img = post._embedded['wp:featuredmedia'][0].source_url;
+  } else if (post.meta?.backdrop_url) {
+    img = post.meta.backdrop_url;
   }
-  if (post.meta?.backdrop_url) return post.meta.backdrop_url;
-  return '/placeholder.jpg';
+  return enforceHttps(img);
 }
 
 /**
@@ -105,15 +115,17 @@ export function getFeaturedImage(post) {
  */
 export function getMovieEmbedUrl(post) {
   if (!post) return null;
-  if (post.meta?.embed_url) return post.meta.embed_url;
-  if (post.meta?.dood_embed) return post.meta.dood_embed;
+  let url = null;
+  if (post.meta?.embed_url) url = post.meta.embed_url;
+  else if (post.meta?.dood_embed) url = post.meta.dood_embed;
+  else {
+    const contentStr = post.content?.rendered || '';
+    const iframeMatch = contentStr.match(/<iframe.*?src=["']([^"']+)["'].*?<\/iframe>/i) ||
+                        contentStr.match(/src=["'](https?:\/\/[^"']+)["']/i);
+    if (iframeMatch) url = iframeMatch[1];
+  }
 
-  const contentStr = post.content?.rendered || '';
-  const iframeMatch = contentStr.match(/<iframe.*?src=["']([^"']+)["'].*?<\/iframe>/i) ||
-                      contentStr.match(/src=["'](https?:\/\/[^"']+)["']/i);
-  if (iframeMatch) return iframeMatch[1];
-
-  return null;
+  return enforceHttps(url);
 }
 
 // Arabic translation map for TMDB genres
@@ -329,6 +341,19 @@ export function parseMovieData(post) {
   // Deduplicate and ensure clean Arabic display
   genres = Array.from(new Set(genres.map(g => GENRE_MAP_AR[g] || g)));
 
+  const secureEmbedUrl = enforceHttps(embedUrl);
+  const secureDoodEmbed = enforceHttps(doodEmbed);
+  const secureStreamtapeEmbed = enforceHttps(streamtapeEmbed);
+  const secureDownloadUrl = enforceHttps(downloadUrl);
+  const securePosterUrl = enforceHttps(posterUrl);
+  const rawDirectStream = post.meta?.direct_stream_url ||
+                          post.meta?.stream_url ||
+                          post.meta?.direct_video_url ||
+                          post.meta?.video_url ||
+                          post.meta?.mp4_url ||
+                          null;
+  const secureDirectStream = enforceHttps(rawDirectStream);
+
   return {
     id: post.id,
     slug: post.slug,
@@ -343,27 +368,22 @@ export function parseMovieData(post) {
     genres,
     cast,
     seoDescription,
-    embedUrl,
-    embed_url: embedUrl,
-    doodEmbed,
-    streamtapeEmbed,
-    embedUrl1080p: doodEmbed || embedUrl,
-    embedUrl720p: streamtapeEmbed || embedUrl,
+    embedUrl: secureEmbedUrl,
+    embed_url: secureEmbedUrl,
+    doodEmbed: secureDoodEmbed,
+    streamtapeEmbed: secureStreamtapeEmbed,
+    embedUrl1080p: secureDoodEmbed || secureEmbedUrl,
+    embedUrl720p: secureStreamtapeEmbed || secureEmbedUrl,
     servers: {
-      server1: doodEmbed || embedUrl,
-      server2: streamtapeEmbed || null,
+      server1: secureDoodEmbed || secureEmbedUrl,
+      server2: secureStreamtapeEmbed || null,
     },
-    downloadUrl,
-    download_url: downloadUrl,
-    directStreamUrl: post.meta?.direct_stream_url ||
-                     post.meta?.stream_url ||
-                     post.meta?.direct_video_url ||
-                     post.meta?.video_url ||
-                     post.meta?.mp4_url ||
-                     null,
-    stream_url: post.meta?.stream_url || post.meta?.direct_stream_url || null,
-    dood_url: doodEmbed || post.meta?.dood_url || post.meta?.dood_embed || embedUrl || null,
-    posterUrl,
+    downloadUrl: secureDownloadUrl,
+    download_url: secureDownloadUrl,
+    directStreamUrl: secureDirectStream,
+    stream_url: secureDirectStream,
+    dood_url: secureDoodEmbed || secureEmbedUrl || null,
+    posterUrl: securePosterUrl,
     synopsis,
     categories: post.categories || [],
   };

@@ -3,18 +3,22 @@ import { useState } from 'react';
 import VideoPlayer from '../../../components/VideoPlayer';
 import styles from './seriesDetail.module.css';
 
-export default function SeriesClient({ series }) {
+export default function SeriesClient({ series, initialSeason = null, initialEpisode = null }) {
   const seasons = series?.seasons || [];
-  const [activeSeasonNum, setActiveSeasonNum] = useState(
-    seasons.length > 0 ? seasons[0].seasonNumber : 1
-  );
+  const defaultSeason = initialSeason && seasons.some(s => s.seasonNumber === initialSeason)
+    ? initialSeason
+    : (seasons.length > 0 ? seasons[0].seasonNumber : 1);
+
+  const [activeSeasonNum, setActiveSeasonNum] = useState(defaultSeason);
 
   const currentSeason = seasons.find((s) => s.seasonNumber === activeSeasonNum) || seasons[0];
   const episodes = currentSeason?.episodes || [];
 
-  const [activeEpisodeNum, setActiveEpisodeNum] = useState(
-    episodes.length > 0 ? episodes[0].episodeNumber : 1
-  );
+  const defaultEpisode = initialEpisode && episodes.some(e => e.episodeNumber === initialEpisode)
+    ? initialEpisode
+    : (episodes.length > 0 ? episodes[0].episodeNumber : 1);
+
+  const [activeEpisodeNum, setActiveEpisodeNum] = useState(defaultEpisode);
 
   const currentEpisode = episodes.find((e) => e.episodeNumber === activeEpisodeNum) || episodes[0];
 

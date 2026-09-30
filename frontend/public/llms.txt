@@ -1,0 +1,17 @@
+# EgyMax - Arabic Streaming & Media Database
+
+> EgyMax (https://egymax.vercel.app) is an Arabic streaming and cinematic database delivering high-definition (1080p FHD & 4K Ultra HD) movies and television series with professional Arabic subtitles, comprehensive synopsis, IMDB ratings, verified release dates, and multi-server video playback.
+
+## Key Sections
+- [الرئيسية - Home](https://egymax.vercel.app/): Featured cinematic releases, highest-rated titles, and daily arrivals.
+- [مكتبة الأفلام - Movies Catalog](https://egymax.vercel.app/movies): Extensive catalog of Arabic and international subtitled movies filterable by genre, year, quality, and popularity.
+- [مكتبة المسلسلات - TV Series Catalog](https://egymax.vercel.app/series): Full TV series library with multi-season and multi-episode indexing.
+- [الأقسام والتصنيفات - Categories](https://egymax.vercel.app/categories): Genre taxonomies including Action, Drama, Crime, Sci-Fi, Horror, Fantasy, and Comedy.
+
+## Sitemaps & Feeds
+- [XML Sitemap](https://egymax.vercel.app/sitemap.xml): Complete, hourly updated index of all movies, TV series, episodes, and category pages.
+
+## Platform Capabilities & Specifications
+- **Language & Localization**: Arabic (Primary interface, Arabic synopsis, professional Arabic subtitles for all international cinema).
+- **Streaming Mirror Redundancy**: Multi-server failover architecture supporting Vidmoly, StreamHG, DoodStream, Streamtape, and custom HLS Cinema Player.
+- **Media Formats**: 1080p Full HD, WEB-DL, BluRay, 4K Ultra HD.

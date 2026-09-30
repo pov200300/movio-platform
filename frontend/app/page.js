@@ -7,6 +7,26 @@ import styles from './page.module.css';
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
+const siteUrl = (process.env.NEXT_PUBLIC_SITE_URL || 'https://egymax.vercel.app')
+  .replace(/^http:\/\//i, 'https://')
+  .replace(/\/+$/, '');
+
+export const metadata = {
+  title: 'EGYMAX | بوابة المشاهدة الأولى للأفلام والمسلسلات الحصرية',
+  description: 'شاهد وحمل أحدث الأفلام والمسلسلات العربية والأجنبية المترجمة بجودة 4K و 1080p مجاناً على سيرفرات سريعة وبدون إعلانات مزعجة على EgyMax.',
+  alternates: {
+    canonical: siteUrl,
+  },
+  openGraph: {
+    title: 'EGYMAX | بوابة المشاهدة الأولى للأفلام والمسلسلات الحصرية',
+    description: 'شاهد وحمل أحدث الأفلام والمسلسلات العربية والأجنبية المترجمة بجودة 4K و 1080p مجاناً على سيرفرات سريعة وبدون إعلانات مزعجة على EgyMax.',
+    url: siteUrl,
+    siteName: 'EgyMax',
+    locale: 'ar_EG',
+    type: 'website',
+  },
+};
+
 export default async function Home() {
   const latestMovies = await getLatestMovies(24);
 

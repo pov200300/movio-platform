@@ -7,6 +7,7 @@ export default function MovieCard({ post, quality }) {
   const movie = parseMovieData(post);
   if (!movie) return null;
 
+  const movieTitle = (movie.cleanTitle || movie.title || movie.displayTitle || movie.rawTitle || 'الفيلم').trim();
   const displayQuality = quality || movie.quality || '1080p';
 
   return (
@@ -15,7 +16,7 @@ export default function MovieCard({ post, quality }) {
         <div className={styles.posterWrapper}>
           <Image
             src={movie.posterUrl}
-            alt={movie.rawTitle}
+            alt={`بوستر فيلم ${movieTitle}`}
             fill
             sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 16vw"
             className={styles.posterImage}

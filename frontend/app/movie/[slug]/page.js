@@ -10,12 +10,19 @@ export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
 export async function generateMetadata({ params }) {
+  const siteUrl = (process.env.NEXT_PUBLIC_SITE_URL || 'https://egymax.vercel.app')
+    .replace(/^http:\/\//i, 'https://')
+    .replace(/\/+$/, '');
+  const pageUrl = `${siteUrl}/movie/${params.slug}`;
+
   try {
     const post = await getMovieBySlug(params.slug);
     if (!post) {
       return {
         title: 'الفيلم غير موجود - EgyMax',
         description: 'عذراً، الفيلم المطلوب غير متوفر حالياً على منصة EgyMax.',
+        alternates: { canonical: pageUrl },
+        robots: { index: false, follow: true },
       };
     }
 
@@ -24,42 +31,48 @@ export async function generateMetadata({ params }) {
       return {
         title: 'الفيلم غير موجود - EgyMax',
         description: 'عذراً، الفيلم المطلوب غير متوفر حالياً على منصة EgyMax.',
+        alternates: { canonical: pageUrl },
+        robots: { index: false, follow: true },
       };
     }
 
-    // 1. Smart Marketing Title for Google Search and browser tabs:
-    // Format: "مشاهدة فيلم ${movie.title} مترجم اون لاين - EgyMax"
+    // 1. Title format: "مشاهدة وتحميل فيلم {title} ({year}) مترجم كامل HD - EgyMax"
     const movieTitle = (movie.title || movie.displayTitle || movie.cleanTitle || movie.rawTitle || '').trim();
+    const movieYear = movie.year || '2026';
     const metaTitle = movieTitle
-      ? `مشاهدة فيلم ${movieTitle} مترجم اون لاين - EgyMax`
-      : 'مشاهدة فيلم مترجم اون لاين - EgyMax';
+      ? `مشاهدة وتحميل فيلم ${movieTitle} (${movieYear}) مترجم كامل HD - EgyMax`
+      : 'مشاهدة وتحميل أحدث الأفلام مترجمة كاملة HD - EgyMax';
 
-    // 2. Clean Excerpt / Description for Meta Description tag
-    let metaDescription = movie.seoDescription || movie.synopsis || '';
-    if (!metaDescription && post.excerpt?.rendered) {
-      metaDescription = post.excerpt.rendered.replace(/<[^>]+>/g, '').trim();
+    // 2. Description: Extract the first 160 characters of the Arabic movie synopsis from the API/TMDB
+    let synopsisRaw = movie.overview_ar || movie.synopsis || movie.seoDescription || '';
+    if (!synopsisRaw && post.excerpt?.rendered) {
+      synopsisRaw = post.excerpt.rendered;
     }
-    if (!metaDescription && post.content?.rendered) {
-      metaDescription = post.content.rendered
-        .replace(/<[^>]+>/g, '')
-        .replace(/(Rating|Release Year|Genres|Quality):[^\n]+/gi, '')
-        .replace(/★\s*[0-9.]+/g, '')
-        .trim();
-    }
-    metaDescription = metaDescription.replace(/\s+/g, ' ').trim();
-
-    if (!metaDescription || metaDescription.length < 15) {
-      metaDescription = `مشاهدة وتحميل فيلم ${movieTitle || 'الفيلم'} (${movie.year || '2026'}) مترجم كامل بجودة فائقة ${movie.quality || '1080p'} بدقة عالية اون لاين حصرياً على منصة EgyMax.`;
-    } else if (metaDescription.length > 170) {
-      metaDescription = metaDescription.slice(0, 165).trim() + '...';
+    if (!synopsisRaw && post.content?.rendered) {
+      synopsisRaw = post.content.rendered;
     }
 
-    // 3. OpenGraph & Twitter Share Tags (Facebook, Telegram, WhatsApp, etc.)
+    let cleanDesc = synopsisRaw
+      .replace(/<[^>]+>/g, '')
+      .replace(/(Rating|Release Year|Genres|Quality|السنة|النوع|الجودة|التقييم):[^\n]+/gi, '')
+      .replace(/★\s*[0-9.]+/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    cleanDesc = decodeHtmlEntities(cleanDesc);
+
+    if (!cleanDesc || cleanDesc.length < 20) {
+      cleanDesc = `تدور أحداث قصة فيلم ${movieTitle || 'الفيلم'} (${movieYear}) في إطار سينمائي ممتع ومميز. شاهد وحمل الفيلم مترجم كامل بدقة عالية 1080p Full HD على منصة EgyMax.`;
+    }
+
+    const metaDescription = cleanDesc.length > 160
+      ? cleanDesc.slice(0, 157).trim() + '...'
+      : cleanDesc;
+
+    // 3. OpenGraph & Twitter Share Tags
     const posterUrl = movie.posterUrl && !movie.posterUrl.includes('placeholder')
       ? movie.posterUrl
-      : 'https://egymax.vercel.app/icon.svg';
-
-    const pageUrl = `https://egymax.vercel.app/movie/${params.slug}`;
+      : `${siteUrl}/icon.svg`;
 
     return {
       title: metaTitle,
@@ -93,8 +106,11 @@ export async function generateMetadata({ params }) {
   } catch (error) {
     console.error(`[SEO] generateMetadata error for slug "${params.slug}":`, error.message);
     return {
-      title: 'مشاهدة وتحميل أحدث الأفلام مترجمة اون لاين - EgyMax',
-      description: 'شاهد وحمل أحدث الأفلام والمسلسلات الحصرية مترجمة بجودة فائقة اون لاين على منصة EgyMax.',
+      title: 'مشاهدة وتحميل فيلم مترجم كامل HD - EgyMax',
+      description: 'شاهد وحمل أحدث الأفلام والمسلسلات الحصرية مترجمة بجودة فائقة 1080p اون لاين على منصة EgyMax.',
+      alternates: {
+        canonical: pageUrl,
+      },
     };
   }
 }
@@ -102,25 +118,26 @@ export async function generateMetadata({ params }) {
 // Helper to derive high-speed direct download link from DoodStream or direct sources
 const getDownloadUrl = (movie) => {
   if (!movie) return null;
+  let url = null;
   if (movie.download_url) {
-    return movie.download_url.includes('/e/') ? movie.download_url.replace('/e/', '/d/') : movie.download_url;
+    url = movie.download_url;
+  } else if (movie.downloadUrl) {
+    url = movie.downloadUrl;
+  } else if (movie.embed_url && typeof movie.embed_url === 'string') {
+    url = movie.embed_url;
+  } else if (movie.embedUrl && typeof movie.embedUrl === 'string') {
+    url = movie.embedUrl;
+  } else if (movie.dood_url && typeof movie.dood_url === 'string') {
+    url = movie.dood_url;
+  } else if (movie.doodUrl && typeof movie.doodUrl === 'string') {
+    url = movie.doodUrl;
+  } else {
+    url = movie.stream_url || movie.directStreamUrl || null;
   }
-  if (movie.downloadUrl) {
-    return movie.downloadUrl.includes('/e/') ? movie.downloadUrl.replace('/e/', '/d/') : movie.downloadUrl;
-  }
-  if (movie.embed_url && typeof movie.embed_url === 'string' && movie.embed_url.includes('/e/')) {
-    return movie.embed_url.replace('/e/', '/d/');
-  }
-  if (movie.embedUrl && typeof movie.embedUrl === 'string' && movie.embedUrl.includes('/e/')) {
-    return movie.embedUrl.replace('/e/', '/d/');
-  }
-  if (movie.dood_url && typeof movie.dood_url === 'string' && movie.dood_url.includes('/e/')) {
-    return movie.dood_url.replace('/e/', '/d/');
-  }
-  if (movie.doodUrl && typeof movie.doodUrl === 'string' && movie.doodUrl.includes('/e/')) {
-    return movie.doodUrl.replace('/e/', '/d/');
-  }
-  return movie.stream_url || movie.directStreamUrl || movie.embed_url || movie.embedUrl || null;
+
+  if (!url || typeof url !== 'string') return null;
+  if (url.includes('/e/')) url = url.replace('/e/', '/d/');
+  return url.replace(/^http:\/\//i, 'https://');
 };
 
 export default async function MoviePage({ params }) {
@@ -134,6 +151,8 @@ export default async function MoviePage({ params }) {
   if (!movie) {
     notFound();
   }
+
+  const movieTitle = (movie.cleanTitle || movie.title || movie.displayTitle || movie.rawTitle || 'الفيلم').trim();
 
   // Derive direct download URL
   const downloadUrl = getDownloadUrl(movie);
@@ -169,7 +188,7 @@ export default async function MoviePage({ params }) {
             <div className={styles.posterWrapper}>
               <Image 
                 src={movie.posterUrl} 
-                alt={movie.rawTitle} 
+                alt={`بوستر فيلم ${movieTitle}`} 
                 fill
                 priority
                 sizes="240px"
@@ -192,12 +211,12 @@ export default async function MoviePage({ params }) {
                   ⬇ سيرفر التحميل
                 </a>
               ) : (
-                <a 
+                <span 
                   className={`${styles.actionBtnDownload} ${styles.actionBtnDownloadDisabled}`}
                   aria-disabled="true"
                 >
                   التحميل غير متوفر حالياً
-                </a>
+                </span>
               )}
             </div>
           </div>

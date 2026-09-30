@@ -1,18 +1,29 @@
+import { notFound } from 'next/navigation';
+import { getSeriesBySlug } from '../../../../lib/api';
+import SeriesClient from '../SeriesClient';
 import Image from 'next/image';
 import Link from 'next/link';
-import { notFound } from 'next/navigation';
-import { getSeriesBySlug } from '../../../lib/api';
-import SeriesClient from './SeriesClient';
-import styles from './seriesDetail.module.css';
+import styles from '../seriesDetail.module.css';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
-export async function generateMetadata({ params, searchParams }) {
+function parseEpisodeParam(param) {
+  if (!param) return { season: 1, episode: 1 };
+  const str = String(param).toLowerCase();
+  const seMatch = str.match(/s(\d+)e(\d+)/);
+  if (seMatch) {
+    return { season: parseInt(seMatch[1], 10), episode: parseInt(seMatch[2], 10) };
+  }
+  const num = parseInt(str.replace(/[^0-9]/g, ''), 10);
+  return { season: 1, episode: isNaN(num) || num <= 0 ? 1 : num };
+}
+
+export async function generateMetadata({ params }) {
   const siteUrl = (process.env.NEXT_PUBLIC_SITE_URL || 'https://egymax.vercel.app')
     .replace(/^http:\/\//i, 'https://')
     .replace(/\/+$/, '');
-  const cleanCanonical = `${siteUrl}/series/${params.slug}`;
+  const cleanCanonical = `${siteUrl}/series/${params.slug}/${params.episode}`;
 
   try {
     const series = await getSeriesBySlug(params.slug);
@@ -25,20 +36,29 @@ export async function generateMetadata({ params, searchParams }) {
       };
     }
 
+    const { season: parsedSeason, episode: parsedEpisode } = parseEpisodeParam(params.episode);
     const seriesTitle = (series.title || series.titleAr || 'مسلسل').trim();
-    const season = searchParams?.season || (series.seasons?.[0]?.seasonNumber) || 1;
-    const episode = searchParams?.episode || (series.seasons?.[0]?.episodes?.[0]?.episodeNumber) || 1;
+
+    // Find if specific episode exists to get episode title / synopsis
+    let epTitle = `الحلقة ${parsedEpisode}`;
+    let epSynopsis = '';
+    const seasonObj = series.seasons?.find(s => s.seasonNumber === parsedSeason);
+    const epObj = seasonObj?.episodes?.find(e => e.episodeNumber === parsedEpisode);
+    if (epObj) {
+      if (epObj.title) epTitle = epObj.title;
+      if (epObj.synopsis) epSynopsis = epObj.synopsis;
+    }
 
     // Title format: "مشاهدة مسلسل {title} الموسم {season} الحلقة {episode} مترجم - EgyMax"
-    const metaTitle = `مشاهدة مسلسل ${seriesTitle} الموسم ${season} الحلقة ${episode} مترجم - EgyMax`;
+    const metaTitle = `مشاهدة مسلسل ${seriesTitle} الموسم ${parsedSeason} الحلقة ${parsedEpisode} مترجم - EgyMax`;
 
-    let cleanDesc = (series.synopsis || series.overview_ar || '')
+    let cleanDesc = (epSynopsis || series.synopsis || series.overview_ar || '')
       .replace(/<[^>]+>/g, '')
       .replace(/\s+/g, ' ')
       .trim();
 
     if (!cleanDesc || cleanDesc.length < 20) {
-      cleanDesc = `مشاهدة وتحميل مسلسل ${seriesTitle} الموسم ${season} الحلقة ${episode} مترجم كامل بجودة عالية 1080p اون لاين على منصة EgyMax.`;
+      cleanDesc = `مشاهدة وتحميل مسلسل ${seriesTitle} الموسم ${parsedSeason} الحلقة ${parsedEpisode} مترجم كامل بجودة عالية 1080p اون لاين على منصة EgyMax.`;
     }
 
     const metaDescription = cleanDesc.length > 160
@@ -49,15 +69,12 @@ export async function generateMetadata({ params, searchParams }) {
       ? series.posterUrl
       : `${siteUrl}/icon.svg`;
 
-    const hasEpisodeParams = Boolean(searchParams?.season || searchParams?.episode);
-
     return {
       title: metaTitle,
       description: metaDescription,
       alternates: {
         canonical: cleanCanonical,
       },
-      robots: hasEpisodeParams ? { index: false, follow: true } : { index: true, follow: true },
       openGraph: {
         title: metaTitle,
         description: metaDescription,
@@ -70,7 +87,7 @@ export async function generateMetadata({ params, searchParams }) {
             url: posterUrl,
             width: 1200,
             height: 630,
-            alt: `بوستر مسلسل ${seriesTitle}`,
+            alt: `بوستر مسلسل ${seriesTitle} الموسم ${parsedSeason} الحلقة ${parsedEpisode}`,
           },
         ],
       },
@@ -92,15 +109,14 @@ export async function generateMetadata({ params, searchParams }) {
   }
 }
 
-export default async function SeriesDetailPage({ params, searchParams }) {
+export default async function SeriesEpisodePage({ params }) {
   const series = await getSeriesBySlug(params.slug);
 
   if (!series) {
     notFound();
   }
 
-  const initialSeason = searchParams?.season ? Number(searchParams.season) : null;
-  const initialEpisode = searchParams?.episode ? Number(searchParams.episode) : null;
+  const { season, episode } = parseEpisodeParam(params.episode);
 
   return (
     <div className="container">
@@ -111,7 +127,9 @@ export default async function SeriesDetailPage({ params, searchParams }) {
           <span className={styles.breadcrumbSep}>‹</span>
           <Link href="/series">المسلسلات</Link>
           <span className={styles.breadcrumbSep}>‹</span>
-          <span className={styles.breadcrumbCurrent}>{series.title}</span>
+          <Link href={`/series/${series.slug}`}>{series.title}</Link>
+          <span className={styles.breadcrumbSep}>‹</span>
+          <span className={styles.breadcrumbCurrent}>الموسم {season} • الحلقة {episode}</span>
         </nav>
 
         {/* Hero Card / Metadata Overview */}
@@ -130,7 +148,9 @@ export default async function SeriesDetailPage({ params, searchParams }) {
           </div>
 
           <div className={styles.infoCol}>
-            <h1 className={styles.seriesMainTitle}>{series.title}</h1>
+            <h1 className={styles.seriesMainTitle}>
+              مشاهدة مسلسل {series.title} — الموسم {season} الحلقة {episode}
+            </h1>
             {series.titleAr && <h2 className={styles.seriesSubTitle}>{series.titleAr}</h2>}
 
             <div className={styles.metaRow}>
@@ -172,8 +192,8 @@ export default async function SeriesDetailPage({ params, searchParams }) {
         {/* Client Interactive Player & Season/Episode Browser */}
         <SeriesClient
           series={series}
-          initialSeason={initialSeason}
-          initialEpisode={initialEpisode}
+          initialSeason={season}
+          initialEpisode={episode}
         />
       </div>
     </div>

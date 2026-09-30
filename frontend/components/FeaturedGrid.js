@@ -15,12 +15,14 @@ export default function FeaturedGrid({ movies }) {
         const movie = parseMovieData(post);
         if (!movie) return null;
 
+        const movieTitle = (movie.cleanTitle || movie.title || movie.displayTitle || movie.rawTitle || 'الفيلم').trim();
+
         return (
           <Link href={`/movie/${movie.slug}`} key={movie.id} className={styles.card}>
             <div className={styles.imageWrapper}>
               <Image
                 src={movie.posterUrl}
-                alt={movie.rawTitle}
+                alt={`بوستر فيلم ${movieTitle}`}
                 fill
                 priority
                 sizes="(max-width: 640px) 50vw, (max-width: 1200px) 25vw, 20vw"
