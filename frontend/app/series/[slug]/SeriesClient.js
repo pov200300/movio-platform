@@ -54,9 +54,13 @@ export default function SeriesClient({ series, initialSeason = null, initialEpis
         <VideoPlayer
           key={`${series.slug}-s${activeSeasonNum}e${activeEpisodeNum}`}
           slug={series.slug}
-          embedUrl={currentEpisode?.embedUrl || currentEpisode?.doodEmbed}
+          servers={currentEpisode?.servers}
+          primaryEmbed={currentEpisode?.primaryEmbed}
+          vidmolyEmbed={currentEpisode?.vidmolyEmbed}
+          streamhgEmbed={currentEpisode?.streamhgEmbed}
           doodEmbed={currentEpisode?.doodEmbed}
           streamtapeEmbed={currentEpisode?.streamtapeEmbed}
+          embedUrl={currentEpisode?.embedUrl || currentEpisode?.primaryEmbed || currentEpisode?.doodEmbed}
           posterUrl={series.backdropUrl || series.posterUrl}
           title={`${series.title} S${activeSeasonNum}E${activeEpisodeNum}`}
         />

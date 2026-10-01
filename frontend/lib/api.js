@@ -115,14 +115,41 @@ export function getFeaturedImage(post) {
  */
 export function getMovieEmbedUrl(post) {
   if (!post) return null;
-  let url = null;
-  if (post.meta?.embed_url) url = post.meta.embed_url;
-  else if (post.meta?.dood_embed) url = post.meta.dood_embed;
-  else {
+  const meta = { ...(post.meta_input || {}), ...(post.meta || {}) };
+
+  let url = meta._stream_vidmoly ||
+            meta.vidmoly_url ||
+            meta.vidmoly_embed ||
+            meta._stream_streamhg ||
+            meta.streamhg_url ||
+            meta.streamhg_embed ||
+            meta._stream_streamtape ||
+            meta.streamtape_url ||
+            meta.streamtape_embed ||
+            meta._stream_doodstream ||
+            meta.doodstream_url ||
+            meta.dood_embed ||
+            meta.embed_url ||
+            meta.embed_url_1080p ||
+            meta.embed_url_720p ||
+            null;
+
+  if (!url) {
     const contentStr = post.content?.rendered || '';
-    const iframeMatch = contentStr.match(/<iframe.*?src=["']([^"']+)["'].*?<\/iframe>/i) ||
-                        contentStr.match(/src=["'](https?:\/\/[^"']+)["']/i);
-    if (iframeMatch) url = iframeMatch[1];
+    const serversMatch = contentStr.match(/<!--\s*SERVERS:\s*([\s\S]*?)-->/i);
+    if (serversMatch) {
+      const commentStr = serversMatch[1];
+      const vMatch = commentStr.match(/\bvidmoly=(https?:\/\/[^\s>]+)/i);
+      const hMatch = commentStr.match(/\bstreamhg=(https?:\/\/[^\s>]+)/i);
+      const sMatch = commentStr.match(/\bstreamtape=(https?:\/\/[^\s>]+)/i);
+      const dMatch = commentStr.match(/\bdood=(https?:\/\/[^\s>]+)/i);
+      url = (vMatch && vMatch[1]) || (hMatch && hMatch[1]) || (sMatch && sMatch[1]) || (dMatch && dMatch[1]);
+    }
+    if (!url) {
+      const iframeMatch = contentStr.match(/<iframe.*?src=["']([^"']+)["'].*?<\/iframe>/i) ||
+                          contentStr.match(/src=["'](https?:\/\/[^"']+)["']/i);
+      if (iframeMatch) url = iframeMatch[1];
+    }
   }
 
   return enforceHttps(url);
@@ -223,37 +250,97 @@ export function parseMovieData(post) {
   }
   if (!quality) quality = '1080p Full HD';
 
-  // 4. Multi-Server Embed & Download URLs
-  const embedUrl = getMovieEmbedUrl(post);
+  // 4. Multi-Server Embed & Download URLs (Vidmoly, StreamHG, Streamtape, Doodstream)
+  const meta = { ...(post.meta_input || {}), ...(post.meta || {}) };
 
-  let doodEmbed = post.meta?.dood_embed || post.meta?.embed_url_1080p || null;
-  let streamtapeEmbed = post.meta?.streamtape_embed || post.meta?.embed_url_720p || null;
+  let vidmolyUrl = meta._stream_vidmoly || meta.vidmoly_url || meta.vidmoly_embed || null;
+  let streamhgUrl = meta._stream_streamhg || meta.streamhg_url || meta.streamhg_embed || null;
+  let streamtapeUrl = meta._stream_streamtape || meta.streamtape_url || meta.streamtape_embed || null;
+  let doodstreamUrl = meta._stream_doodstream || meta.doodstream_url || meta.dood_embed || null;
 
-  // Extract from HTML comment: <!-- SERVERS: dood=... streamtape=... -->
-  if (!doodEmbed || !streamtapeEmbed) {
-    const serversMatch = content.match(/<!--\s*SERVERS:\s*dood=(.*?)\s+streamtape=(.*?)\s*-->/i);
-    if (serversMatch) {
-      if (!doodEmbed && serversMatch[1] && serversMatch[1].trim()) {
-        doodEmbed = serversMatch[1].trim();
-      }
-      if (!streamtapeEmbed && serversMatch[2] && serversMatch[2].trim()) {
-        streamtapeEmbed = serversMatch[2].trim();
-      }
+  // Extract from HTML comments:
+  // e.g. <!-- SERVERS: vidmoly=... streamhg=... streamtape=... dood=... -->
+  // or legacy: <!-- SERVERS: dood=... streamtape=... -->
+  const serversMatch = content.match(/<!--\s*SERVERS:\s*([\s\S]*?)-->/i);
+  if (serversMatch) {
+    const commentStr = serversMatch[1];
+    const vMatch = commentStr.match(/\bvidmoly=(https?:\/\/[^\s>]+)/i);
+    const hMatch = commentStr.match(/\bstreamhg=(https?:\/\/[^\s>]+)/i);
+    const sMatch = commentStr.match(/\bstreamtape=(https?:\/\/[^\s>]+)/i);
+    const dMatch = commentStr.match(/\bdood=(https?:\/\/[^\s>]+)/i);
+
+    if (!vidmolyUrl && vMatch && vMatch[1]) vidmolyUrl = vMatch[1].trim();
+    if (!streamhgUrl && hMatch && hMatch[1]) streamhgUrl = hMatch[1].trim();
+    if (!streamtapeUrl && sMatch && sMatch[1]) streamtapeUrl = sMatch[1].trim();
+    if (!doodstreamUrl && dMatch && dMatch[1]) doodstreamUrl = dMatch[1].trim();
+  }
+
+  // Fallbacks from embed_url_1080p and embed_url_720p
+  if (!vidmolyUrl && meta.embed_url_1080p && meta.embed_url_1080p.includes('vidmoly')) {
+    vidmolyUrl = meta.embed_url_1080p;
+  }
+  if (!streamhgUrl && meta.embed_url_720p && meta.embed_url_720p.includes('streamhg')) {
+    streamhgUrl = meta.embed_url_720p;
+  }
+  if (!streamtapeUrl && meta.embed_url_720p && (meta.embed_url_720p.includes('streamtape') || meta.embed_url_720p.includes('tapecontent') || meta.embed_url_720p.includes('strtape'))) {
+    streamtapeUrl = meta.embed_url_720p;
+  }
+  if (!doodstreamUrl && meta.embed_url_1080p && (meta.embed_url_1080p.includes('dood') || meta.embed_url_1080p.includes('ds2play') || meta.embed_url_1080p.includes('doood'))) {
+    doodstreamUrl = meta.embed_url_1080p;
+  }
+
+  // Fallbacks based on fallbackEmbed domain
+  const fallbackEmbed = getMovieEmbedUrl(post);
+  if (fallbackEmbed && typeof fallbackEmbed === 'string') {
+    const fLower = fallbackEmbed.toLowerCase();
+    if (!vidmolyUrl && fLower.includes('vidmoly')) {
+      vidmolyUrl = fallbackEmbed;
+    } else if (!streamhgUrl && (fLower.includes('streamhg') || fLower.includes('streamhgapi'))) {
+      streamhgUrl = fallbackEmbed;
+    } else if (!streamtapeUrl && (fLower.includes('streamtape') || fLower.includes('tapecontent') || fLower.includes('strtape'))) {
+      streamtapeUrl = fallbackEmbed;
+    } else if (!doodstreamUrl && (fLower.includes('dood') || fLower.includes('ds2play') || fLower.includes('doood'))) {
+      doodstreamUrl = fallbackEmbed;
     }
   }
 
-  // Fallbacks based on embed domain
-  if (!doodEmbed && embedUrl && (embedUrl.includes('dood') || embedUrl.includes('ds2play') || embedUrl.includes('doood'))) {
-    doodEmbed = embedUrl;
-  }
-  if (!streamtapeEmbed && embedUrl && (embedUrl.includes('streamtape') || embedUrl.includes('tapecontent') || embedUrl.includes('strtape'))) {
-    streamtapeEmbed = embedUrl;
+  // Enforce HTTPS
+  vidmolyUrl = enforceHttps(vidmolyUrl);
+  streamhgUrl = enforceHttps(streamhgUrl);
+  streamtapeUrl = enforceHttps(streamtapeUrl);
+  doodstreamUrl = enforceHttps(doodstreamUrl);
+
+  // Set default primary player URL in order of priority:
+  // primaryEmbed = vidmoly_url || streamhg_url || streamtape_url || doodstream_url || fallback_url
+  const primaryEmbed = vidmolyUrl || streamhgUrl || streamtapeUrl || doodstreamUrl || fallbackEmbed || null;
+
+  // Create clean servers array for each item:
+  const servers = [
+    { id: 'vidmoly', name: 'Vidmoly (1080p)', label: '🚀 سيرفر 1 (Vidmoly 1080p)', url: vidmolyUrl, fast: true },
+    { id: 'streamhg', name: 'StreamHG (720p)', label: '⚡ سيرفر 2 (StreamHG 720p)', url: streamhgUrl, fast: true },
+    { id: 'streamtape', name: 'Streamtape', label: '🌐 سيرفر 3 (Streamtape)', url: streamtapeUrl, fast: false },
+    { id: 'doodstream', name: 'Doodstream', label: '🎬 سيرفر 4 (Doodstream)', url: doodstreamUrl, fast: false },
+  ].filter(s => !!s.url);
+
+  // Fallback for older posts that have a single generic embed
+  if (servers.length === 0 && primaryEmbed) {
+    servers.push({
+      id: 'default',
+      name: 'السيرفر الأساسي',
+      label: '🚀 السيرفر الأساسي',
+      url: primaryEmbed,
+      fast: true,
+    });
   }
 
-  const downloadUrl = post.meta?.download_url || 
-                      post.meta?.downloadUrl || 
-                      (doodEmbed && typeof doodEmbed === 'string' && doodEmbed.includes('/e/') ? doodEmbed.replace('/e/', '/d/') : null) ||
-                      (embedUrl && typeof embedUrl === 'string' && embedUrl.includes('/e/') ? embedUrl.replace('/e/', '/d/') : null);
+  // Backwards compatibility for legacy properties
+  servers.server1 = primaryEmbed;
+  servers.server2 = streamhgUrl || streamtapeUrl || null;
+
+  const downloadUrl = meta.download_url || 
+                      meta.downloadUrl || 
+                      (doodstreamUrl && typeof doodstreamUrl === 'string' && doodstreamUrl.includes('/e/') ? doodstreamUrl.replace('/e/', '/d/') : null) ||
+                      (primaryEmbed && typeof primaryEmbed === 'string' && primaryEmbed.includes('/e/') ? primaryEmbed.replace('/e/', '/d/') : null);
 
   // 5. Poster Image
   const posterUrl = getFeaturedImage(post);
@@ -341,9 +428,6 @@ export function parseMovieData(post) {
   // Deduplicate and ensure clean Arabic display
   genres = Array.from(new Set(genres.map(g => GENRE_MAP_AR[g] || g)));
 
-  const secureEmbedUrl = enforceHttps(embedUrl);
-  const secureDoodEmbed = enforceHttps(doodEmbed);
-  const secureStreamtapeEmbed = enforceHttps(streamtapeEmbed);
   const secureDownloadUrl = enforceHttps(downloadUrl);
   const securePosterUrl = enforceHttps(posterUrl);
   const rawDirectStream = post.meta?.direct_stream_url ||
@@ -368,21 +452,25 @@ export function parseMovieData(post) {
     genres,
     cast,
     seoDescription,
-    embedUrl: secureEmbedUrl,
-    embed_url: secureEmbedUrl,
-    doodEmbed: secureDoodEmbed,
-    streamtapeEmbed: secureStreamtapeEmbed,
-    embedUrl1080p: secureDoodEmbed || secureEmbedUrl,
-    embedUrl720p: secureStreamtapeEmbed || secureEmbedUrl,
-    servers: {
-      server1: secureDoodEmbed || secureEmbedUrl,
-      server2: secureStreamtapeEmbed || null,
-    },
+    embedUrl: primaryEmbed,
+    embed_url: primaryEmbed,
+    primaryEmbed: primaryEmbed,
+    vidmolyEmbed: vidmolyUrl,
+    streamhgEmbed: streamhgUrl,
+    streamtapeEmbed: streamtapeUrl,
+    doodEmbed: doodstreamUrl,
+    vidmoly_url: vidmolyUrl,
+    streamhg_url: streamhgUrl,
+    streamtape_url: streamtapeUrl,
+    doodstream_url: doodstreamUrl,
+    embedUrl1080p: vidmolyUrl || doodstreamUrl || primaryEmbed,
+    embedUrl720p: streamhgUrl || streamtapeUrl || primaryEmbed,
+    servers,
     downloadUrl: secureDownloadUrl,
     download_url: secureDownloadUrl,
     directStreamUrl: secureDirectStream,
     stream_url: secureDirectStream,
-    dood_url: secureDoodEmbed || secureEmbedUrl || null,
+    dood_url: doodstreamUrl || primaryEmbed || null,
     posterUrl: securePosterUrl,
     synopsis,
     categories: post.categories || [],
@@ -733,6 +821,10 @@ export async function getSeriesList({ search = '', category = null } = {}) {
                   episodeNumber: 1,
                   title: 'الحلقة 1',
                   duration: '45 دقيقة',
+                  servers: movie.servers,
+                  primaryEmbed: movie.primaryEmbed,
+                  vidmolyEmbed: movie.vidmolyEmbed,
+                  streamhgEmbed: movie.streamhgEmbed,
                   doodEmbed: movie.doodEmbed,
                   streamtapeEmbed: movie.streamtapeEmbed,
                   embedUrl: movie.embedUrl,
@@ -816,6 +908,10 @@ export async function getSeriesBySlug(slug) {
                 episodeNumber: 1,
                 title: 'الحلقة 1',
                 duration: '45 دقيقة',
+                servers: movie.servers,
+                primaryEmbed: movie.primaryEmbed,
+                vidmolyEmbed: movie.vidmolyEmbed,
+                streamhgEmbed: movie.streamhgEmbed,
                 doodEmbed: movie.doodEmbed,
                 streamtapeEmbed: movie.streamtapeEmbed,
                 embedUrl: movie.embedUrl,

@@ -280,7 +280,7 @@ export default async function MoviePage({ params }) {
             <div className={styles.noticeBox}>
               <span className={styles.noticeIcon}>💡</span>
               <p className={styles.noticeText}>
-                إذا واجهت أي مشكلة في تشغيل الفيديو أو الصوت، يرجى التبديل بين سيرفرات المشاهدة المتاحة أسفل مشغل الفيديو مباشرة.
+                إذا واجهت أي مشكلة في تشغيل الفيديو أو الصوت، يرجى التبديل بين سيرفرات المشاهدة المتاحة أعلى مشغل الفيديو مباشرة.
               </p>
             </div>
           </div>
@@ -303,9 +303,13 @@ export default async function MoviePage({ params }) {
 
           <VideoPlayer 
             slug={params.slug}
-            embedUrl={movie.embedUrl}
-            doodEmbed={movie.doodEmbed}
+            servers={movie.servers}
+            embedUrl={movie.embedUrl || movie.primaryEmbed}
+            primaryEmbed={movie.primaryEmbed}
+            vidmolyEmbed={movie.vidmolyEmbed}
+            streamhgEmbed={movie.streamhgEmbed}
             streamtapeEmbed={movie.streamtapeEmbed}
+            doodEmbed={movie.doodEmbed}
             directStreamUrl={movie.directStreamUrl}
             posterUrl={movie.posterUrl} 
             title={movie.rawTitle} 

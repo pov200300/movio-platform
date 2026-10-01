@@ -1178,15 +1178,37 @@ def read_subtitle_file_robustly(file_path: str) -> str:
 # =============================================================================
 # 4. ARABIC-ONLY SUBTITLES & FFMPEG HARDSUBBING (BURN-IN)
 # =============================================================================
-def download_subtitles_for_imdb(imdb_id: str, output_dir: str = DOWNLOAD_DIR) -> str:
+def download_subtitles_for_imdb(
+    imdb_id: str,
+    download_dir: str = DOWNLOAD_DIR,
+    season: int = None,
+    episode: int = None,
+    **kwargs
+) -> str:
     """
     Search and download ONLY the highest-rated Arabic (.srt) subtitle file.
-    Validates content with Unicode regex [\\u0600-\\u06FF] across Arabic code pages.
-    Returns the local path to the .srt file if successful, or None if not found or failed.
+    Supports both:
+      - Movies: called with (imdb_id, download_dir)
+      - TV Series Episodes: called with (imdb_id, download_dir, season=X, episode=Y)
+    Accepts flexible **kwargs to prevent keyword argument mismatches.
     """
     if not imdb_id:
         log("SUBS", "No IMDb ID available; skipping Arabic subtitle download.")
         return None
+
+    # Handle parameter aliases from kwargs
+    output_dir = kwargs.get("output_dir", download_dir)
+    season_val = season if season is not None else kwargs.get("season_num")
+    episode_val = episode if episode is not None else kwargs.get("episode_num")
+
+    # When season and episode are provided, route directly to TV episode subtitle engine
+    if season_val is not None and episode_val is not None:
+        try:
+            s_num = int(season_val)
+            e_num = int(episode_val)
+            return download_subtitles_for_tv_episode(imdb_id, s_num, e_num, output_dir=output_dir, **kwargs)
+        except (ValueError, TypeError) as err:
+            log("SUBS", f"Warning converting season/episode: {err}; continuing with movie search.")
 
     subs_dir = os.path.join(output_dir, "subtitles")
     os.makedirs(subs_dir, exist_ok=True)
@@ -1294,6 +1316,7 @@ def download_subtitles_for_imdb(imdb_id: str, output_dir: str = DOWNLOAD_DIR) ->
                             out_srt = os.path.join(subs_dir, f"{imdb_id}_ara.srt")
                             with open(out_srt, "w", encoding="utf-8", newline="\n") as sf:
                                 sf.write(clean_text)
+                            sanitize_subtitle_file(out_srt, out_srt)
                             log("SUBS", f"✅ Movie Subtitle candidate {sub_idx}/{len(arabic_sub_urls)} ({fname}) verified ({ar_count} Arabic chars) and saved -> {os.path.basename(out_srt)}")
                             return out_srt
                         else:
@@ -1305,19 +1328,45 @@ def download_subtitles_for_imdb(imdb_id: str, output_dir: str = DOWNLOAD_DIR) ->
     log("SUBS", f"Failed downloading or verifying Arabic subtitle for {imdb_id}.")
     return None
 
-def download_subtitles_for_tv_episode(imdb_id: str, season_num: int, episode_num: int, output_dir: str = DOWNLOAD_DIR) -> str:
+def download_subtitles_for_tv_episode(
+    imdb_id: str,
+    season_num: int = None,
+    episode_num: int = None,
+    output_dir: str = DOWNLOAD_DIR,
+    **kwargs
+) -> str:
     """
     Search and download Arabic subtitles precisely targeted to the TV Show's Season and Episode.
     Uses OpenSubtitles v3 public series endpoint with candidate validation and fallback loop.
+    Supports season/episode passed as positional or keyword arguments (season, season_num, episode, episode_num).
+    Filters candidate release names/tags by S{season:02d}E{episode:02d}.
     """
     if not imdb_id:
         log("SUBS", "No IMDb ID available for TV episode subtitle search.")
         return None
 
-    subs_dir = os.path.join(output_dir, "subtitles")
+    # Resolve aliases from kwargs if not passed directly
+    if season_num is None:
+        season_num = kwargs.get("season", kwargs.get("s"))
+    if episode_num is None:
+        episode_num = kwargs.get("episode", kwargs.get("e"))
+
+    if season_num is None or episode_num is None:
+        log("SUBS", f"Incomplete season/episode ({season_num}, {episode_num}); skipping TV subtitle download.")
+        return None
+
+    try:
+        season_num = int(season_num)
+        episode_num = int(episode_num)
+    except (ValueError, TypeError):
+        log("SUBS", f"Invalid season/episode integers ({season_num}, {episode_num}); skipping TV subtitle download.")
+        return None
+
+    subs_dir = os.path.join(kwargs.get("download_dir", output_dir), "subtitles")
     os.makedirs(subs_dir, exist_ok=True)
 
     episode_tag = f"S{season_num:02d}E{episode_num:02d}"
+    episode_tag_alt = f"{season_num}x{episode_num:02d}"
     log("SUBS", f"Searching Arabic subtitles for TV Episode {imdb_id} {episode_tag}...")
 
     # 1. Primary: OpenSubtitles v3 series endpoint
@@ -1329,7 +1378,29 @@ def download_subtitles_for_tv_episode(imdb_id: str, season_num: int, episode_num
             ar_subs = [s for s in subs if s.get("lang") in ("ara", "ar")]
             if ar_subs:
                 log("SUBS", f"Found {len(ar_subs)} Arabic subtitles on OpenSubtitles v3 endpoint. Validating candidates...")
-                for idx, candidate in enumerate(ar_subs, start=1):
+
+                def _candidate_score(cand):
+                    score = 0
+                    text_meta = f"{cand.get('subtitleFileName', '')} {cand.get('movieReleaseName', '')} {cand.get('url', '')}".lower()
+                    if episode_tag.lower() in text_meta or episode_tag_alt.lower() in text_meta:
+                        score += 10
+                    if cand.get("season") == season_num and cand.get("episode") == episode_num:
+                        score += 20
+                    return score
+
+                sorted_ar_subs = sorted(ar_subs, key=_candidate_score, reverse=True)
+
+                for idx, candidate in enumerate(sorted_ar_subs, start=1):
+                    # Filter: if candidate specifies season/episode and they don't match, skip
+                    cand_s = candidate.get("season")
+                    cand_e = candidate.get("episode")
+                    if cand_s is not None and cand_e is not None:
+                        try:
+                            if int(cand_s) != season_num or int(cand_e) != episode_num:
+                                continue
+                        except Exception:
+                            pass
+
                     dl_url = candidate.get("url")
                     if not dl_url:
                         continue
@@ -1343,17 +1414,71 @@ def download_subtitles_for_tv_episode(imdb_id: str, season_num: int, episode_num
                                 out_srt = os.path.join(subs_dir, f"{imdb_id}_{episode_tag}_ara.srt")
                                 with open(out_srt, "w", encoding="utf-8", newline="\n") as f:
                                     f.write(clean_text)
-                                log("SUBS", f"✅ TV Subtitle candidate {idx}/{len(ar_subs)} verified ({arabic_count} Arabic chars) and saved -> {os.path.basename(out_srt)}")
+                                sanitize_subtitle_file(out_srt, out_srt)
+                                log("SUBS", f"✅ TV Subtitle candidate {idx}/{len(sorted_ar_subs)} verified ({arabic_count} Arabic chars) and saved -> {os.path.basename(out_srt)}")
                                 return out_srt
                             else:
-                                log("SUBS", f"⚠️ Candidate subtitle {idx}/{len(ar_subs)} failed validation ({arabic_count} Arabic chars), trying next available subtitle...")
+                                log("SUBS", f"⚠️ Candidate subtitle {idx}/{len(sorted_ar_subs)} failed validation ({arabic_count} Arabic chars), trying next available subtitle...")
                     except Exception as ce:
-                        log("SUBS", f"⚠️ Candidate subtitle {idx}/{len(ar_subs)} download error: {ce}, trying next available subtitle...")
+                        log("SUBS", f"⚠️ Candidate subtitle {idx}/{len(sorted_ar_subs)} download error: {ce}, trying next available subtitle...")
                         continue
     except Exception as e:
         log("SUBS", f"OpenSubtitles v3 notice: {e}")
 
-    # 2. No valid subtitle found in OpenSubtitles v3
+    # 2. Resilient fallback: Query mirror domains filtering by S{season:02d}E{episode:02d}
+    mirrors = [
+        f"https://yifysubtitles.ch/movie-imdb/{imdb_id}",
+        f"https://yts-subs.com/movie-imdb/{imdb_id}",
+        f"https://yifysubtitles.org/movie-imdb/{imdb_id}"
+    ]
+    mirror_candidates = []
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"}
+    for mirror_url in mirrors:
+        try:
+            mr = requests.get(mirror_url, headers=headers, timeout=10)
+            if mr.status_code == 200:
+                soup = BeautifulSoup(mr.text, "html.parser")
+                for tr in soup.find_all("tr"):
+                    row_text = tr.text.lower()
+                    if ("arabic" in row_text or "ara" in row_text) and (episode_tag.lower() in row_text or episode_tag_alt.lower() in row_text):
+                        link = tr.find("a", href=True)
+                        if link and "/subtitles/" in link["href"] and link["href"] not in mirror_candidates:
+                            mirror_candidates.append(link["href"])
+                if mirror_candidates:
+                    break
+        except Exception:
+            continue
+
+    if mirror_candidates:
+        zip_mirrors = ["https://yifysubtitles.ch", "https://yts-subs.com", "https://yifysubtitles.org"]
+        for sub_idx, sub_url in enumerate(mirror_candidates, start=1):
+            slug = sub_url.rstrip("/").split("/")[-1]
+            for zip_base in zip_mirrors:
+                zip_url = f"{zip_base}/subtitle/{slug}.zip"
+                try:
+                    zr = requests.get(zip_url, headers={"User-Agent": headers["User-Agent"], "Referer": f"{zip_base}/subtitles/{slug}"}, timeout=15)
+                    if zr.status_code != 200:
+                        continue
+                    with zipfile.ZipFile(io.BytesIO(zr.content)) as z:
+                        srt_files = [f for f in z.namelist() if f.lower().endswith(".srt") and not f.startswith("__MACOSX")]
+                        matched_srts = [f for f in srt_files if episode_tag.lower() in f.lower() or episode_tag_alt.lower() in f.lower()]
+                        if not matched_srts:
+                            matched_srts = srt_files
+                        for fname in matched_srts:
+                            f_bytes = z.read(fname)
+                            raw_text = decode_arabic_subtitle_bytes(f_bytes)
+                            clean_text = sanitize_subtitle_text(fix_arabic_mojibake(raw_text))
+                            ar_count = len(re.findall(r'[\u0600-\u06FF]', clean_text))
+                            if ar_count >= 30:
+                                out_srt = os.path.join(subs_dir, f"{imdb_id}_{episode_tag}_ara.srt")
+                                with open(out_srt, "w", encoding="utf-8", newline="\n") as sf:
+                                    sf.write(clean_text)
+                                sanitize_subtitle_file(out_srt, out_srt)
+                                log("SUBS", f"✅ TV Subtitle candidate from mirror verified ({ar_count} Arabic chars) -> {os.path.basename(out_srt)}")
+                                return out_srt
+                except Exception:
+                    continue
+
     log("SUBS", f"⚠️ No valid Arabic subtitles found for TV episode {imdb_id} {episode_tag}. Skipping subtitle download.")
     return None
 
@@ -2941,7 +3066,7 @@ def run_pipeline(movie_title: str, release_year: str = None, imdb_id: str = None
                 raise RuntimeError(f"All {max_tries} torrent candidates failed to download for TV episode '{parsed['show_name']} {parsed['episode_tag']}'.")
 
             # 4. Fetch Arabic Subtitles (.srt) targeting exact Season & Episode
-            arabic_srt_path = download_subtitles_for_tv_episode(target_imdb, parsed["season_number"], parsed["episode_number"], DOWNLOAD_DIR)
+            arabic_srt_path = download_subtitles_for_imdb(target_imdb, DOWNLOAD_DIR, season=parsed["season_number"], episode=parsed["episode_number"])
 
             # 5. Burn Arabic Subtitles directly into 1080p video frames once
             burned_1080p_path = burn_arabic_subtitles(raw_video_path, arabic_srt_path)
