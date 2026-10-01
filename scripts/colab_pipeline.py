@@ -87,6 +87,10 @@ DOWNLOAD_DIR = "/content/download" if os.path.exists("/content") else os.path.ab
 STAGING_DIR = "/content/staging" if os.path.exists("/content") else os.path.abspath("./staging_temp")
 FONTS_DIR = "/content/fonts" if os.path.exists("/content") else os.path.abspath("./fonts")
 
+# Execution mode: default to False for full automated zero-touch uninterrupted run
+PREVIEW_MODE = os.getenv("PREVIEW_MODE", "false").lower() in ("true", "1", "yes")
+
+
 def setup_arabic_fonts(fonts_dir: str = FONTS_DIR) -> str:
     """
     Direct Arabic font provisioning: ensures Noto Sans Arabic and Cairo font families
@@ -1040,10 +1044,13 @@ def sanitize_subtitle_text(text: str) -> str:
     if has_arrows:
         text = text.replace("-->", "SRTARROWTOKEN")
 
-    # 5. Strip all brackets, braces, and quotes ([\(\)\[\]\{\}\<\>«»“"”‘’\'`\\])
+    # 5. Explicitly strip zero-width and BiDi control characters (\u200B-\u200F, \u202A-\u202E, \uFEFF)
+    text = re.sub(r'[\u200B-\u200F\u202A-\u202E\uFEFF]', '', text)
+
+    # 6. Strip all brackets, braces, and quotes ([\(\)\[\]\{\}\<\>«»“"”‘’\'`\\])
     text = re.sub(r'[\(\)\[\]\{\}\<\>«»“"”‘’\'`\\]', '', text)
 
-    # 6. Apply STRICT WHITELIST regex:
+    # 7. Apply STRICT WHITELIST regex:
     # Only Arabic letters, Arabic-Indic digits, ASCII digits, English letters, whitespace,
     # and standard punctuation (. , ! ? : - ، ؟)
     text = re.sub(r'[^\u0621-\u064A\u0660-\u0669a-zA-Z0-9\s\.\,\!\?\:\-\،\؟]', '', text)
@@ -1437,117 +1444,241 @@ def read_subtitle_file_robustly(file_path: str) -> str:
 # 4. ARABIC-ONLY SUBTITLES, AUDIO-SYNC & FFMPEG HARDSUBBING (BURN-IN)
 # =============================================================================
 
-def score_release_match(text: str, source_release: str) -> int:
-    """
-    Score how well subtitle filename/metadata matches the source video release type.
-    Prioritizes matching release formats (e.g. BluRay vs WEB-DL) to minimize sync drift.
-    """
-    if not text or not source_release:
-        return 0
-    t_lower = text.lower()
-    s_lower = source_release.lower()
-
+def detect_release_type(text: str) -> str:
+    """Detect release source format from video or subtitle filename/tag."""
+    if not text:
+        return "unknown"
+    t = text.lower()
     bluray_tokens = ["bluray", "blu-ray", "bdrip", "brrip", "remux"]
-    web_tokens = ["web-dl", "webrip", "web.", "web-", "web "]
+    web_tokens = ["web-dl", "webrip", "web-rip", "web.", "web-", "web ", "amzn", "amazon", "netflix", "nf", "hmax", "dsnp", "apple", "itunes"]
     hdtv_tokens = ["hdtv", "pdtv", "dsr"]
 
-    is_source_bluray = any(tok in s_lower for tok in bluray_tokens)
-    is_source_web = any(tok in s_lower for tok in web_tokens)
-    is_source_hdtv = any(tok in s_lower for tok in hdtv_tokens)
+    if any(tok in t for tok in bluray_tokens):
+        return "bluray"
+    if any(tok in t for tok in web_tokens):
+        return "web"
+    if any(tok in t for tok in hdtv_tokens):
+        return "hdtv"
+    return "unknown"
 
-    if is_source_bluray:
-        if any(tok in t_lower for tok in bluray_tokens):
-            return 10
-        elif any(tok in t_lower for tok in web_tokens):
-            return -5
-    elif is_source_web:
-        if any(tok in t_lower for tok in web_tokens):
-            return 10
-        elif any(tok in t_lower for tok in bluray_tokens):
-            return -5
-    elif is_source_hdtv:
-        if any(tok in t_lower for tok in hdtv_tokens):
-            return 10
-        elif any(tok in t_lower for tok in bluray_tokens):
-            return -5
 
-    return 0
-
-def sync_subtitles_with_audio(video_path: str, srt_path: str, max_offset_seconds: int = 60) -> str:
+def score_release_match(candidate_text: str, source_release: str) -> int:
     """
-    Synchronize subtitle timestamps with the video audio track using ffsubsync.
-    Automatically aligns speech activity in the video audio with subtitle timestamps.
-    Returns path to synchronized SRT on success, or original srt_path on fallback/error.
+    Score candidate subtitle against target video release source:
+    - +100 if candidate filename matches exact release type (e.g. BluRay on BluRay, WEB on WEB)
+    - +50 if candidate mentions 'YTS' or 'YIFY'
+    - -80 penalty if video is 'BluRay' but candidate is 'WEB-DL' / 'WEBRip' (and vice versa)
+    - +20 for matching resolution tag (1080p, 720p, etc.)
+    """
+    if not candidate_text:
+        return 0
+    c_lower = candidate_text.lower()
+    s_lower = (source_release or "").lower()
+
+    source_type = detect_release_type(s_lower)
+    cand_type = detect_release_type(c_lower)
+
+    score = 0
+
+    # 1. Release type compatibility
+    if source_type != "unknown" and cand_type != "unknown":
+        if source_type == cand_type:
+            score += 100
+        elif (source_type == "bluray" and cand_type == "web") or (source_type == "web" and cand_type == "bluray"):
+            score -= 80  # Severe penalty for BluRay <-> WEB-DL mismatch
+        else:
+            score -= 30
+    elif source_type != "unknown" and cand_type == "unknown":
+        score -= 10
+
+    # 2. Candidate mentions YTS or YIFY
+    if any(y in c_lower for y in ["yts", "yify"]):
+        score += 50
+
+    # 3. Matching resolution tag (1080p, 720p, 2160p, 4k)
+    for res in ["1080p", "720p", "2160p", "4k"]:
+        if res in s_lower and res in c_lower:
+            score += 20
+            break
+
+    return score
+
+
+def is_release_mismatch(candidate_text: str, source_release: str) -> bool:
+    """Check if candidate subtitle format conflicts with video source format."""
+    source_type = detect_release_type(source_release)
+    cand_type = detect_release_type(candidate_text)
+    if source_type in ["bluray", "web"] and cand_type in ["bluray", "web"]:
+        return source_type != cand_type
+    return False
+
+
+def autonomous_fallback_sync(
+    video_path: str,
+    srt_path: str,
+    reason: str = "Release Mismatch",
+    max_offset_seconds: int = 120
+) -> str:
+    """
+    Autonomous Subtitle Synchronization Engine:
+    When a release mismatch occurs (e.g. WEB-DL subtitle on a BluRay rip),
+    automatically executes headless audio alignment using `alass` (or `ffsubsync` fallback).
+    Automatically corrects intro offsets (studio logos) and stretches/compresses framerate
+    differences (23.976 <-> 24/25 fps) without manual offset inputs.
     """
     if not video_path or not srt_path or not os.path.exists(video_path) or not os.path.exists(srt_path):
         return srt_path
 
-    ffsubsync_bin = shutil.which("ffsubsync")
-    base_cmd = [ffsubsync_bin] if ffsubsync_bin else [sys.executable, "-m", "ffsubsync"]
+    log("AUTOSYNC", f"⚡ Autonomous Fallback Sync triggered ({reason}): Aligning '{os.path.basename(srt_path)}' to '{os.path.basename(video_path)}'...")
 
     synced_srt = os.path.splitext(srt_path)[0] + "_synced.srt"
+    if os.path.exists(synced_srt):
+        try: os.remove(synced_srt)
+        except Exception: pass
+
+    # 1. Locate or provision `alass` binary
+    alass_bin = shutil.which("alass") or shutil.which("alass-cli")
+    if not alass_bin:
+        for possible_path in ["/usr/local/bin/alass", "/usr/bin/alass", "/content/alass", "./alass"]:
+            if os.path.exists(possible_path) and os.access(possible_path, os.X_OK):
+                alass_bin = possible_path
+                break
+
+    # Auto-provision standalone alass if running on Linux and missing
+    if not alass_bin and sys.platform.startswith("linux"):
+        try:
+            target_bin = "/usr/local/bin/alass" if os.access("/usr/local/bin", os.W_OK) else "/tmp/alass"
+            log("AUTOSYNC", f"Provisioning standalone alass binary to {target_bin}...")
+            r = requests.get("https://github.com/kaegi/alass/releases/download/v2.0.0/alass-linux64", timeout=30)
+            if r.status_code == 200 and len(r.content) > 100_000:
+                with open(target_bin, "wb") as bf:
+                    bf.write(r.content)
+                os.chmod(target_bin, 0o755)
+                alass_bin = target_bin
+                log("AUTOSYNC", "✅ alass binary provisioned successfully.")
+        except Exception as prov_err:
+            log("AUTOSYNC", f"Notice provisioning alass: {prov_err}")
+
+    if alass_bin:
+        try:
+            log("AUTOSYNC", f"Executing alass engine ({alass_bin}) in headless mode...")
+            cmd = [alass_bin, video_path, srt_path, synced_srt]
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+            if res.returncode == 0 and os.path.exists(synced_srt) and os.path.getsize(synced_srt) > 100:
+                sanitize_srt_file(synced_srt, synced_srt)
+                log("AUTOSYNC", f"✅ alass successfully corrected intro offsets and framerate ({os.path.getsize(synced_srt)} bytes) -> {os.path.basename(synced_srt)}")
+                return synced_srt
+            else:
+                err_msg = res.stderr[:200] if res.stderr else "failed"
+                log("AUTOSYNC", f"alass notice (code {res.returncode}): {err_msg}. Falling back to ffsubsync audio alignment...")
+        except Exception as e:
+            log("AUTOSYNC", f"alass exception: {e}; falling back to ffsubsync audio alignment...")
+
+    # 2. Try `ffsubsync` as seamless audio-alignment fallback
+    ffsubsync_bin = shutil.which("ffsubsync")
+    base_cmd = [ffsubsync_bin] if ffsubsync_bin else [sys.executable, "-m", "ffsubsync"]
     try:
-        log("AUTOSYNC", f"Attempting audio-based subtitle synchronization via ffsubsync (max offset {max_offset_seconds}s)...")
+        log("AUTOSYNC", "Executing audio-based alignment via ffsubsync...")
         cmd = base_cmd + [
             video_path,
             "-i", srt_path,
             "-o", synced_srt,
             "--max-offset-seconds", str(max_offset_seconds)
         ]
-        res = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
         if res.returncode == 0 and os.path.exists(synced_srt) and os.path.getsize(synced_srt) > 100:
-            log("AUTOSYNC", f"✅ Subtitles successfully synchronized with audio track -> {os.path.basename(synced_srt)}")
+            sanitize_srt_file(synced_srt, synced_srt)
+            log("AUTOSYNC", f"✅ ffsubsync successfully synchronized subtitle -> {os.path.basename(synced_srt)}")
             return synced_srt
         else:
             err_msg = res.stderr[:200] if res.stderr else "none"
-            log("AUTOSYNC", f"⚠️ ffsubsync notice (code {res.returncode}): {err_msg}. Keeping original subtitle timing.")
+            log("AUTOSYNC", f"⚠️ ffsubsync notice (code {res.returncode}): {err_msg}. Retaining baseline subtitle.")
     except Exception as e:
-        log("AUTOSYNC", f"⚠️ ffsubsync notice: {e}. Keeping original subtitle timing.")
+        log("AUTOSYNC", f"⚠️ ffsubsync error: {e}. Retaining baseline subtitle.")
 
     return srt_path
 
-def download_subtitles_for_imdb(
+
+sync_subtitles_with_audio = autonomous_fallback_sync
+
+
+def search_and_download_yify_subtitles(
     imdb_id: str,
     download_dir: str = DOWNLOAD_DIR,
     season: int = None,
     episode: int = None,
+    video_path: str = None,
     **kwargs
 ) -> str:
     """
-    Search and download ONLY the highest-rated Arabic (.srt) subtitle file.
-    Supports both:
-      - Movies: called with (imdb_id, download_dir)
-      - TV Series Episodes: called with (imdb_id, download_dir, season=X, episode=Y)
-    Accepts flexible **kwargs to prevent keyword argument mismatches.
+    Smart Release-Aware Arabic Subtitle Retrieval & Synchronization Engine:
+    1. Inspects the target video filename to detect the exact release source (e.g. BluRay, BRRip, WEB-DL, WEBRip, YTS).
+    2. Scores candidate subtitles before downloading:
+       + Score +100 if candidate matches exact release type (e.g. BluRay on BluRay).
+       + Score +50 if candidate mentions 'YTS' or 'YIFY'.
+       - Penalty -80 if video is 'BluRay' but candidate is 'WEB-DL' / 'WEBRip' (and vice versa).
+       + Score +20 for matching resolution tag (1080p, 720p).
+    3. Automatically sorts and picks the candidate with the highest release compatibility score.
+    4. Autonomous Fallback Sync (alass): If best available subtitle has a release mismatch,
+       automatically runs alass (or ffsubsync) in headless mode to correct intro offsets & framerate differences.
     """
     if not imdb_id:
         log("SUBS", "No IMDb ID available; skipping Arabic subtitle download.")
         return None
 
-    # Handle parameter aliases from kwargs
+    # Handle parameter aliases
     output_dir = kwargs.get("output_dir", download_dir)
     season_val = season if season is not None else kwargs.get("season_num")
     episode_val = episode if episode is not None else kwargs.get("episode_num")
 
-    # When season and episode are provided, route directly to TV episode subtitle engine
+    # When season and episode are provided, route to TV episode subtitle engine
     if season_val is not None and episode_val is not None:
         try:
             s_num = int(season_val)
             e_num = int(episode_val)
-            return download_subtitles_for_tv_episode(imdb_id, s_num, e_num, output_dir=output_dir, **kwargs)
+            return download_subtitles_for_tv_episode(imdb_id, s_num, e_num, output_dir=output_dir, video_path=video_path, **kwargs)
         except (ValueError, TypeError) as err:
             log("SUBS", f"Warning converting season/episode: {err}; continuing with movie search.")
 
     subs_dir = os.path.join(output_dir, "subtitles")
     os.makedirs(subs_dir, exist_ok=True)
 
+    # Inspect target video to detect release source
+    target_video_file = (
+        video_path or
+        kwargs.get("video_path") or
+        kwargs.get("raw_video_path") or
+        kwargs.get("video_file") or
+        kwargs.get("target_video")
+    )
+    if not target_video_file or not os.path.exists(target_video_file):
+        if os.path.exists(output_dir):
+            video_files = []
+            for root, _, files in os.walk(output_dir):
+                for f in files:
+                    if f.lower().endswith((".mp4", ".mkv", ".avi", ".webm")) and not f.startswith("."):
+                        fp = os.path.join(root, f)
+                        try:
+                            video_files.append((os.path.getmtime(fp), os.path.getsize(fp), fp))
+                        except Exception:
+                            pass
+            if video_files:
+                video_files.sort(key=lambda x: (x[1] > 10_000_000, x[0]), reverse=True)
+                target_video_file = video_files[0][2]
+
+    target_video_name = os.path.basename(target_video_file) if target_video_file else ""
+    source_hint = str(kwargs.get("release_type") or kwargs.get("source_title") or kwargs.get("source_release") or "")
+    effective_video_name = target_video_name or source_hint
+    video_release_type = detect_release_type(effective_video_name)
+
+    log("SUBS", f"Searching Arabic subtitles for IMDb ID '{imdb_id}' | Target Video: '{effective_video_name}' (Detected Release: '{video_release_type}')...")
+
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
     }
 
-    source_release = str(kwargs.get("release_type") or kwargs.get("source_title") or kwargs.get("source_release") or "")
-    log("SUBS", f"Searching highest-rated Arabic subtitle for IMDb ID '{imdb_id}' (release hint: '{source_release}')...")
-    arabic_sub_urls = []
+    candidates = []
+    seen_slugs = set()
 
     # 1. Try JSON endpoint first
     try:
@@ -1556,27 +1687,35 @@ def download_subtitles_for_imdb(
         if r.status_code == 200:
             data = r.json().get("subs", {}).get(imdb_id, {})
             arabic_subs = data.get("arabic", [])
-            if arabic_subs:
-                sorted_subs = sorted(
-                    arabic_subs,
-                    key=lambda x: (score_release_match(x.get("url", ""), source_release), x.get("rating", 0) or 0),
-                    reverse=True
-                )
-                for s in sorted_subs:
-                    u = s.get("url")
-                    if u and u not in arabic_sub_urls:
-                        arabic_sub_urls.append(u)
-                if arabic_sub_urls:
-                    log("SUBS", f"Found {len(arabic_sub_urls)} Arabic subtitle candidates via JSON API.")
+            for s in arabic_subs:
+                u = s.get("url")
+                if not u:
+                    continue
+                cand_slug = u.rstrip("/").split("/")[-1]
+                if cand_slug in seen_slugs:
+                    continue
+                seen_slugs.add(cand_slug)
+                cand_text = s.get("release") or s.get("name") or cand_slug
+                rating_val = s.get("rating", 0) or 0
+                rel_score = score_release_match(cand_text, effective_video_name)
+                candidates.append({
+                    "url": u,
+                    "slug": cand_slug,
+                    "text": cand_text,
+                    "rating": rating_val,
+                    "score": rel_score
+                })
+            if candidates:
+                log("SUBS", f"Found {len(candidates)} Arabic subtitle candidates via JSON API.")
     except Exception as e:
         log("SUBS", f"JSON API notice: {e}")
 
     # 2. Resilient fallback to HTML scraping across mirror domains
-    if not arabic_sub_urls:
+    if not candidates:
         mirrors = [
-            f"https://yifysubtitles.ch/movie-imdb/{imdb_id}",
             f"https://yts-subs.com/movie-imdb/{imdb_id}",
-            f"https://yifysubtitles.org/movie-imdb/{imdb_id}"
+            f"https://yifysubtitles.org/movie-imdb/{imdb_id}",
+            f"https://yifysubtitles.ch/movie-imdb/{imdb_id}"
         ]
         for mirror_url in mirrors:
             try:
@@ -1593,82 +1732,165 @@ def download_subtitles_for_imdb(
                                 if "arabic" in td.text.strip().lower():
                                     lang_text = "arabic"
                                     break
-                        # Strictly match Arabic rows - NEVER fall back to top/first row
                         if lang_text == "arabic" or "arabic" in lang_text:
                             link = tr.find("a", href=True)
-                            if link and "/subtitles/" in link["href"] and link["href"] not in arabic_sub_urls:
-                                arabic_sub_urls.append(link["href"])
-                    if arabic_sub_urls:
-                        log("SUBS", f"Found {len(arabic_sub_urls)} Arabic subtitle candidates on mirror: {mirror_url}")
+                            if link and "/subtitles/" in link["href"]:
+                                sub_url = link["href"]
+                                cand_slug = sub_url.rstrip("/").split("/")[-1]
+                                if cand_slug in seen_slugs:
+                                    continue
+                                seen_slugs.add(cand_slug)
+
+                                rating_val = 0
+                                rating_cell = tr.find(class_="rating-cell")
+                                if rating_cell:
+                                    m_r = re.search(r'(-?\d+)', rating_cell.text)
+                                    if m_r:
+                                        try: rating_val = int(m_r.group(1))
+                                        except Exception: pass
+
+                                cand_text = f"{link.text.strip()} {tr.text.strip()} {cand_slug}"
+                                rel_score = score_release_match(cand_text, effective_video_name)
+                                candidates.append({
+                                    "url": sub_url,
+                                    "slug": cand_slug,
+                                    "text": cand_text,
+                                    "rating": rating_val,
+                                    "score": rel_score
+                                })
+                    if candidates:
+                        log("SUBS", f"Found {len(candidates)} Arabic subtitle candidates on mirror: {mirror_url}")
                         break
             except Exception:
                 continue
 
-    if not arabic_sub_urls:
+    if not candidates:
         log("SUBS", f"No Arabic subtitles found for IMDb ID {imdb_id}.")
         return None
 
-    # Prioritize candidate URLs by source release match (e.g. BluRay vs WEB-DL)
-    if source_release:
-        arabic_sub_urls.sort(key=lambda u: score_release_match(u, source_release), reverse=True)
+    # Score and sort candidates by release compatibility score and rating
+    candidates.sort(key=lambda c: (c["score"], c["rating"]), reverse=True)
+    top_cand = candidates[0]
+    log("SUBS", f"Top candidate before download: '{top_cand['slug']}' (Score: {top_cand['score']}, Rating: {top_cand['rating']})")
 
-    # 3. Candidate validation loop across candidate URLs & zip archives
+    # 3. Candidate download & validation loop across mirrors
     zip_mirrors = [
-        "https://yifysubtitles.ch",
+        "https://subtitles.yts-subs.com",
         "https://yts-subs.com",
+        "https://yifysubtitles.ch",
         "https://yifysubtitles.org"
     ]
 
-    for sub_idx, sub_url in enumerate(arabic_sub_urls, start=1):
-        slug = sub_url.rstrip("/").split("/")[-1]
-        for zip_base in zip_mirrors:
-            zip_url = f"{zip_base}/subtitle/{slug}.zip"
-            page_referer = f"{zip_base}/subtitles/{slug}"
-            req_headers = {
-                "User-Agent": headers["User-Agent"],
-                "Referer": page_referer
-            }
-            try:
-                zr = requests.get(zip_url, headers=req_headers, timeout=15)
-                if zr.status_code != 200:
-                    continue
-                raw_data = zr.content.strip()
-                # Inspect downloaded content: check if an HTML error / anti-bot page was returned
-                if raw_data.lower().startswith(b"<!doctype html") or raw_data.lower().startswith(b"<html") or b"<body" in raw_data[:500].lower():
-                    continue
+    for sub_idx, cand in enumerate(candidates, start=1):
+        slug = cand["slug"]
+        sub_url = cand["url"]
+        zip_bytes = None
 
-                with zipfile.ZipFile(io.BytesIO(zr.content)) as z:
-                    srt_files = [f for f in z.namelist() if f.lower().endswith(".srt") and not f.startswith("__MACOSX")]
-                    if not srt_files:
+        # Try direct CDN zip first (subtitles.yts-subs.com)
+        try:
+            cdn_url = f"https://subtitles.yts-subs.com/subtitles/{slug}.zip"
+            zr = requests.get(cdn_url, headers=headers, timeout=12)
+            if zr.status_code == 200 and len(zr.content) > 500 and not zr.content.strip().lower().startswith(b"<!doctype html"):
+                zip_bytes = zr.content
+        except Exception:
+            pass
+
+        # If CDN fails, iterate through mirrors
+        if not zip_bytes:
+            for zip_base in zip_mirrors:
+                page_referer = f"{zip_base}/subtitles/{slug}"
+                req_headers = {
+                    "User-Agent": headers["User-Agent"],
+                    "Referer": page_referer
+                }
+                # Try direct mirror zip URL
+                for url_pattern in [f"{zip_base}/subtitle/{slug}.zip", f"{zip_base}/subtitles/{slug}.zip"]:
+                    try:
+                        zr = requests.get(url_pattern, headers=req_headers, timeout=12)
+                        if zr.status_code == 200 and len(zr.content) > 500:
+                            raw = zr.content.strip()
+                            if not (raw.lower().startswith(b"<!doctype html") or raw.lower().startswith(b"<html")):
+                                zip_bytes = zr.content
+                                break
+                    except Exception:
                         continue
+                if zip_bytes:
+                    break
 
-                    # Prioritize .srt files matching source release type, then Arabic keywords
-                    def _srt_sort_key(f_name):
-                        lang_score = 10 if ("arabic" in f_name.lower() or "ara" in f_name.lower()) else 0
-                        rel_score = score_release_match(f_name, source_release)
-                        return (rel_score + lang_score)
+                # Try scraping download button with base64 data-link from details page
+                try:
+                    detail_url = f"{zip_base}/subtitles/{slug}"
+                    dr = requests.get(detail_url, headers=req_headers, timeout=10)
+                    if dr.status_code == 200:
+                        soup = BeautifulSoup(dr.text, "html.parser")
+                        btn = soup.find(id="btn-download-subtitle") or soup.find("a", class_="download-subtitle")
+                        if btn and btn.get("data-link"):
+                            import base64
+                            decoded_link = base64.b64decode(btn["data-link"]).decode("utf-8", errors="ignore")
+                            if decoded_link.startswith("http"):
+                                zr2 = requests.get(decoded_link, headers=req_headers, timeout=12)
+                                if zr2.status_code == 200 and len(zr2.content) > 500:
+                                    zip_bytes = zr2.content
+                                    break
+                except Exception:
+                    continue
 
-                    sorted_files = sorted(srt_files, key=_srt_sort_key, reverse=True)
-                    for fname in sorted_files:
-                        f_bytes = z.read(fname)
-                        raw_text = decode_arabic_subtitle_bytes(f_bytes)
-                        clean_text = sanitize_subtitle_text(fix_arabic_mojibake(raw_text))
-                        ar_count = len(re.findall(r'[\u0600-\u06FF]', clean_text))
-                        if ar_count >= 30:
-                            out_srt = os.path.join(subs_dir, f"{imdb_id}_ara.srt")
-                            with open(out_srt, "w", encoding="utf-8", newline="\n") as sf:
-                                sf.write(clean_text)
-                            sanitize_subtitle_file(out_srt, out_srt)
-                            log("SUBS", f"✅ Movie Subtitle candidate {sub_idx}/{len(arabic_sub_urls)} ({fname}) verified ({ar_count} Arabic chars) and saved -> {os.path.basename(out_srt)}")
-                            return out_srt
+        if not zip_bytes:
+            continue
+
+        try:
+            with zipfile.ZipFile(io.BytesIO(zip_bytes)) as z:
+                srt_files = [f for f in z.namelist() if f.lower().endswith(".srt") and not f.startswith("__MACOSX")]
+                if not srt_files:
+                    continue
+
+                def _srt_sort_key(f_name):
+                    lang_score = 10 if ("arabic" in f_name.lower() or "ara" in f_name.lower()) else 0
+                    rel_score = score_release_match(f_name, effective_video_name)
+                    return (rel_score + lang_score)
+
+                sorted_files = sorted(srt_files, key=_srt_sort_key, reverse=True)
+                for fname in sorted_files:
+                    f_bytes = z.read(fname)
+                    raw_text = decode_arabic_subtitle_bytes(f_bytes)
+                    clean_text = sanitize_subtitle_text(fix_arabic_mojibake(raw_text))
+                    ar_count = len(re.findall(r'[\u0600-\u06FF]', clean_text))
+                    if ar_count >= 30:
+                        out_srt = os.path.join(subs_dir, f"{imdb_id}_ara.srt")
+                        with open(out_srt, "w", encoding="utf-8", newline="\n") as sf:
+                            sf.write(clean_text)
+                        sanitize_subtitle_file(out_srt, out_srt)
+
+                        final_match_score = score_release_match(fname, effective_video_name)
+                        has_mismatch = is_release_mismatch(fname, effective_video_name) or (final_match_score < 0)
+
+                        if has_mismatch:
+                            log("SUBS", f"⚠️ Candidate subtitle '{fname}' has release mismatch with video '{effective_video_name}' (Score: {final_match_score}).")
+                            log("SUBS", "⚡ Triggering autonomous headless fallback sync (alass / audio alignment)...")
+                            if target_video_file and os.path.exists(target_video_file):
+                                out_srt = autonomous_fallback_sync(
+                                    target_video_file,
+                                    out_srt,
+                                    reason=f"Release Mismatch ({fname} vs {os.path.basename(target_video_file)})"
+                                )
+                            else:
+                                log("SUBS", "⚠️ Video file not available on local disk; retaining downloaded subtitle.")
                         else:
-                            log("SUBS", f"⚠️ Candidate subtitle {sub_idx}/{len(arabic_sub_urls)} ({fname}) failed validation ({ar_count} Arabic chars), trying next available subtitle...")
-            except Exception as e:
-                log("SUBS", f"Mirror {zip_base} notice on candidate {sub_idx}: {e}")
-                continue
+                            log("SUBS", f"✅ Best Arabic subtitle '{fname}' verified with perfect release compatibility (Score: {final_match_score}, {ar_count} Arabic chars) -> {os.path.basename(out_srt)}")
+
+                        return out_srt
+                    else:
+                        log("SUBS", f"⚠️ Candidate subtitle {sub_idx} ({fname}) failed Arabic validation ({ar_count} Arabic chars), trying next...")
+        except Exception as ze:
+            log("SUBS", f"Notice unpacking candidate {sub_idx} ({slug}): {ze}")
+            continue
 
     log("SUBS", f"Failed downloading or verifying Arabic subtitle for {imdb_id}.")
     return None
+
+
+download_subtitles_for_imdb = search_and_download_yify_subtitles
+
 
 def download_subtitles_for_tv_episode(
     imdb_id: str,
@@ -1759,7 +1981,15 @@ def download_subtitles_for_tv_episode(
                                 with open(out_srt, "w", encoding="utf-8", newline="\n") as f:
                                     f.write(clean_text)
                                 sanitize_subtitle_file(out_srt, out_srt)
-                                log("SUBS", f"✅ TV Subtitle candidate {idx}/{len(sorted_ar_subs)} verified ({arabic_count} Arabic chars) and saved -> {os.path.basename(out_srt)}")
+                                cand_name = str(candidate.get('subtitleFileName') or candidate.get('movieReleaseName') or candidate.get('url') or '')
+                                match_score = score_release_match(cand_name, source_release)
+                                if is_release_mismatch(cand_name, source_release):
+                                    log("SUBS", f"⚠️ Candidate TV subtitle '{cand_name}' has release mismatch with '{source_release}' (score: {match_score}). Flagged for autonomous fallback sync.")
+                                    video_file = kwargs.get("video_path") or kwargs.get("raw_video_path")
+                                    if video_file and os.path.exists(video_file):
+                                        out_srt = autonomous_fallback_sync(video_file, out_srt, reason=f"TV Release Mismatch ({cand_name} vs {source_release})")
+                                else:
+                                    log("SUBS", f"✅ TV Subtitle candidate {idx}/{len(sorted_ar_subs)} verified ({arabic_count} Arabic chars, match score: {match_score}) and saved -> {os.path.basename(out_srt)}")
                                 return out_srt
                             else:
                                 log("SUBS", f"⚠️ Candidate subtitle {idx}/{len(sorted_ar_subs)} failed validation ({arabic_count} Arabic chars), trying next available subtitle...")
@@ -1818,7 +2048,14 @@ def download_subtitles_for_tv_episode(
                                 with open(out_srt, "w", encoding="utf-8", newline="\n") as sf:
                                     sf.write(clean_text)
                                 sanitize_subtitle_file(out_srt, out_srt)
-                                log("SUBS", f"✅ TV Subtitle candidate from mirror verified ({ar_count} Arabic chars) -> {os.path.basename(out_srt)}")
+                                match_score = score_release_match(fname, source_release)
+                                if is_release_mismatch(fname, source_release):
+                                    log("SUBS", f"⚠️ Candidate TV mirror subtitle '{fname}' has release mismatch with '{source_release}' (score: {match_score}). Flagged for autonomous fallback sync.")
+                                    video_file = kwargs.get("video_path") or kwargs.get("raw_video_path")
+                                    if video_file and os.path.exists(video_file):
+                                        out_srt = autonomous_fallback_sync(video_file, out_srt, reason=f"TV Mirror Mismatch ({fname} vs {source_release})")
+                                else:
+                                    log("SUBS", f"✅ TV Subtitle candidate from mirror verified ({ar_count} Arabic chars, match score: {match_score}) -> {os.path.basename(out_srt)}")
                                 return out_srt
                 except Exception:
                     continue
@@ -3550,13 +3787,14 @@ def run_pipeline(
                 raise RuntimeError(f"All {max_tries} torrent candidates failed to download for TV episode '{parsed['show_name']} {parsed['episode_tag']}'.")
 
             # 4. Fetch Arabic Subtitles (.srt) targeting exact Season & Episode with source release prioritization
-            source_title_info = target_torrent.get("title", "") if isinstance(target_torrent, dict) else os.path.basename(raw_video_path)
+            source_title_info = candidate.get("title", "") if (isinstance(candidate, dict) and candidate.get("title")) else os.path.basename(raw_video_path)
             arabic_srt_path = download_subtitles_for_imdb(
                 target_imdb, DOWNLOAD_DIR,
                 season=parsed["season_number"],
                 episode=parsed["episode_number"],
                 source_title=source_title_info,
-                release_type=source_title_info
+                release_type=source_title_info,
+                video_path=raw_video_path
             )
 
             # Fast 60-Second Preview Mode Intercept
@@ -3773,7 +4011,8 @@ def run_pipeline(
             arabic_srt_path = download_subtitles_for_imdb(
                 target_imdb, DOWNLOAD_DIR,
                 source_title=source_title_info,
-                release_type=source_title_info
+                release_type=source_title_info,
+                video_path=raw_video_path
             )
 
             # Fast 60-Second Preview Mode Intercept
