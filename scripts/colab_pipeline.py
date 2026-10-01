@@ -2154,6 +2154,7 @@ def upload_to_vidmoly(video_path: str, api_key: str = VIDMOLY_API_KEY, max_retri
         try:
             log("VIDMOLY", f"Requesting Vidmoly upload server (Attempt {attempt}/{max_retries})...")
             upload_url = None
+            sess_id = None
             for mirror in mirrors:
                 try:
                     srv_resp = requests.get(
@@ -2165,7 +2166,8 @@ def upload_to_vidmoly(video_path: str, api_key: str = VIDMOLY_API_KEY, max_retri
                     if srv_resp.status_code == 200:
                         data = srv_resp.json()
                         if data.get("result"):
-                            upload_url = data["result"]
+                            upload_url = data.get("result")
+                            sess_id = data.get("sess_id")
                             break
                 except Exception:
                     continue
@@ -2178,8 +2180,10 @@ def upload_to_vidmoly(video_path: str, api_key: str = VIDMOLY_API_KEY, max_retri
             if HAS_TOOLBELT:
                 with open(video_path, 'rb') as f:
                     encoder = MultipartEncoder(fields={
-                        'file': (filename, f, 'video/mp4'),
-                        'key': api_key
+                        'sess_id': sess_id or '',
+                        'key': api_key,
+                        'api_key': api_key,
+                        'file': (filename, f, 'video/mp4')
                     })
                     last_pct = [-1]
                     def progress(monitor):
@@ -2199,7 +2203,11 @@ def upload_to_vidmoly(video_path: str, api_key: str = VIDMOLY_API_KEY, max_retri
                     resp = requests.post(
                         upload_url,
                         files={'file': (filename, f, 'video/mp4')},
-                        data={'key': api_key},
+                        data={
+                            'sess_id': sess_id or '',
+                            'key': api_key,
+                            'api_key': api_key
+                        },
                         headers={'User-Agent': HEADERS["User-Agent"]},
                         timeout=7200
                     )
