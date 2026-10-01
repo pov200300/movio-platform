@@ -24,6 +24,7 @@ import subprocess
 from urllib.parse import quote, quote_plus
 from requests.auth import HTTPBasicAuth
 from bs4 import BeautifulSoup
+import unicodedata
 
 if sys.stdout and hasattr(sys.stdout, "reconfigure"):
     try:
@@ -88,23 +89,32 @@ FONTS_DIR = "/content/fonts" if os.path.exists("/content") else os.path.abspath(
 
 def setup_arabic_fonts(fonts_dir: str = FONTS_DIR) -> str:
     """
-    Direct Arabic font provisioning: ensures NotoSansArabic-Bold.ttf exists in fonts_dir.
-    In local or offline testing environments, falls back gracefully without raising exceptions.
+    Direct Arabic font provisioning: ensures Noto Sans Arabic and Cairo font families
+    exist in fonts_dir with offline resilience and fontconfig cache update.
     """
     try:
         os.makedirs(fonts_dir, exist_ok=True)
-        font_file = os.path.join(fonts_dir, "NotoSansArabic-Bold.ttf")
-        if not os.path.exists(font_file) or os.path.getsize(font_file) == 0:
-            url = "https://github.com/googlefonts/noto-fonts/raw/main/hinted/ttf/NotoSansArabic/NotoSansArabic-Bold.ttf"
-            log("FONTS", f"Downloading Noto Sans Arabic font to {font_file}...")
-            r = requests.get(url, timeout=10)
-            if r.status_code == 200 and len(r.content) > 1000:
-                with open(font_file, "wb") as f:
-                    f.write(r.content)
-                log("FONTS", f"✅ Noto Sans Arabic font downloaded -> {font_file}")
-                fc_bin = shutil.which("fc-cache")
-                if fc_bin:
-                    subprocess.run([fc_bin, "-fv", fonts_dir], capture_output=True)
+        fonts = [
+            ("NotoSansArabic-Bold.ttf", "https://github.com/googlefonts/noto-fonts/raw/main/hinted/ttf/NotoSansArabic/NotoSansArabic-Bold.ttf"),
+            ("NotoSansArabic-Regular.ttf", "https://github.com/googlefonts/noto-fonts/raw/main/hinted/ttf/NotoSansArabic/NotoSansArabic-Regular.ttf"),
+            ("Cairo-SemiBold.ttf", "https://github.com/google/fonts/raw/main/ofl/cairo/static/Cairo-SemiBold.ttf"),
+        ]
+        for font_name, url in fonts:
+            font_file = os.path.join(fonts_dir, font_name)
+            if not os.path.exists(font_file) or os.path.getsize(font_file) == 0:
+                log("FONTS", f"Downloading Arabic font to {font_file}...")
+                try:
+                    r = requests.get(url, timeout=12)
+                    if r.status_code == 200 and len(r.content) > 1000:
+                        with open(font_file, "wb") as f:
+                            f.write(r.content)
+                        log("FONTS", f"✅ Font downloaded -> {font_name}")
+                except Exception as dl_err:
+                    log("FONTS", f"Notice downloading {font_name}: {dl_err}")
+
+        fc_bin = shutil.which("fc-cache")
+        if fc_bin:
+            subprocess.run([fc_bin, "-fv", fonts_dir], capture_output=True)
         return fonts_dir
     except Exception as e:
         log("FONTS", f"Notice on Arabic font setup (offline/fallback mode): {e}")
@@ -985,18 +995,47 @@ def download_with_aria2(torrent_source: str, download_dir: str = DOWNLOAD_DIR, s
 def sanitize_subtitle_text(text: str) -> str:
     """
     Sanitize decoded subtitle text to eliminate libass rendering artifacts and tofu boxes ([]):
-    - Purges directional and bidirectional formatting marks (LRM, RLM, LRE, RLE, PDF, LRO, RLO, LRI, RLI, FSI, PDI, ALM).
-    - Purges zero-width spaces/joiners/non-joiners and BOM marks (\u200b, \u200c, \u200d, \ufeff, \ufffe).
-    - Purges Unicode replacement glyphs (\ufffd) that render as tofu boxes ([]).
+    - Normalizes Lam-Alif presentation forms (U+FEF5 through U+FEFC) to standard Lam + Alif
+      to eliminate [] tofu boxes around words like "علاقة" and "مارلا".
+    - Unicode NFKC normalization: decomposes presentation form ligatures into standard Unicode.
+    - Strips ALL Arabic diacritics / tashkeel / harakat / tatweel completely:
+      re.sub(r'[\u064B-\u065F\u0670\u0640]', '', text)
+    - Purges directional and bidirectional formatting marks, zero-width codes, and BOM marks.
     - Normalizes line endings to standard Unix \n and strips null bytes.
     """
     if not text:
         return ""
     text = text.replace("\x00", "").replace("\r\n", "\n").replace("\r", "\n")
+
+    # 1. Normalize Lam-Alif presentation forms (U+FEF5 through U+FEFC) to standard Lam + Alif
+    lam_alif_map = {
+        '\uFEF5': '\u0644\u0622',  # Isolated Lam with Alef with Madda -> لآ
+        '\uFEF6': '\u0644\u0622',  # Final Lam with Alef with Madda -> لآ
+        '\uFEF7': '\u0644\u0623',  # Isolated Lam with Alef with Hamza Above -> لأ
+        '\uFEF8': '\u0644\u0623',  # Final Lam with Alef with Hamza Above -> لأ
+        '\uFEF9': '\u0644\u0625',  # Isolated Lam with Alef with Hamza Below -> لإ
+        '\uFEFA': '\u0644\u0625',  # Final Lam with Alef with Hamza Below -> لإ
+        '\uFEFB': '\u0644\u0627',  # Isolated Lam with Alef -> لا
+        '\uFEFC': '\u0644\u0627',  # Final Lam with Alef -> لا
+    }
+    for char, rep in lam_alif_map.items():
+        text = text.replace(char, rep)
+
+    # 2. Unicode NFKC normalization: decomposes presentation form ligatures into standard Unicode
+    text = unicodedata.normalize("NFKC", text)
+
+    # 3. Strip ALL Arabic diacritics / tashkeel / harakat / tatweel completely
+    # (Fatha, Damma, Kasra, Sukun, Tanween variants, Shadda, Dagger Alif, Tatweel)
+    text = re.sub(r'[\u064B-\u065F\u0670\u0640]', '', text)
+    text = text.replace("ـ", "")
+
+    # 4. Purge directional / bidirectional formatting marks, zero-width characters, BOM, replacement glyphs
     tofu_and_bidi_pattern = re.compile(
-        r"[\u200e\u200f\u202a-\u202e\u200b\u200c\u200d\ufeff\ufffe\ufffd\u061c\u2066-\u2069]"
+        r"[\u200e\u200f\u202a-\u202e\u200b\u200c\u200d\ufeff\ufffe\ufffd\u061c\u2066-\u2069\u034f\u00ad]"
     )
-    return tofu_and_bidi_pattern.sub("", text)
+    text = tofu_and_bidi_pattern.sub("", text)
+
+    return text
 
 
 def decode_arabic_subtitle_bytes(raw_bytes: bytes) -> str:
@@ -1176,8 +1215,78 @@ def read_subtitle_file_robustly(file_path: str) -> str:
     return sanitize_subtitle_text(repaired)
 
 # =============================================================================
-# 4. ARABIC-ONLY SUBTITLES & FFMPEG HARDSUBBING (BURN-IN)
+# 4. ARABIC-ONLY SUBTITLES, AUDIO-SYNC & FFMPEG HARDSUBBING (BURN-IN)
 # =============================================================================
+
+def score_release_match(text: str, source_release: str) -> int:
+    """
+    Score how well subtitle filename/metadata matches the source video release type.
+    Prioritizes matching release formats (e.g. BluRay vs WEB-DL) to minimize sync drift.
+    """
+    if not text or not source_release:
+        return 0
+    t_lower = text.lower()
+    s_lower = source_release.lower()
+
+    bluray_tokens = ["bluray", "blu-ray", "bdrip", "brrip", "remux"]
+    web_tokens = ["web-dl", "webrip", "web.", "web-", "web "]
+    hdtv_tokens = ["hdtv", "pdtv", "dsr"]
+
+    is_source_bluray = any(tok in s_lower for tok in bluray_tokens)
+    is_source_web = any(tok in s_lower for tok in web_tokens)
+    is_source_hdtv = any(tok in s_lower for tok in hdtv_tokens)
+
+    if is_source_bluray:
+        if any(tok in t_lower for tok in bluray_tokens):
+            return 10
+        elif any(tok in t_lower for tok in web_tokens):
+            return -5
+    elif is_source_web:
+        if any(tok in t_lower for tok in web_tokens):
+            return 10
+        elif any(tok in t_lower for tok in bluray_tokens):
+            return -5
+    elif is_source_hdtv:
+        if any(tok in t_lower for tok in hdtv_tokens):
+            return 10
+        elif any(tok in t_lower for tok in bluray_tokens):
+            return -5
+
+    return 0
+
+def sync_subtitles_with_audio(video_path: str, srt_path: str, max_offset_seconds: int = 60) -> str:
+    """
+    Synchronize subtitle timestamps with the video audio track using ffsubsync.
+    Automatically aligns speech activity in the video audio with subtitle timestamps.
+    Returns path to synchronized SRT on success, or original srt_path on fallback/error.
+    """
+    if not video_path or not srt_path or not os.path.exists(video_path) or not os.path.exists(srt_path):
+        return srt_path
+
+    ffsubsync_bin = shutil.which("ffsubsync")
+    base_cmd = [ffsubsync_bin] if ffsubsync_bin else [sys.executable, "-m", "ffsubsync"]
+
+    synced_srt = os.path.splitext(srt_path)[0] + "_synced.srt"
+    try:
+        log("AUTOSYNC", f"Attempting audio-based subtitle synchronization via ffsubsync (max offset {max_offset_seconds}s)...")
+        cmd = base_cmd + [
+            video_path,
+            "-i", srt_path,
+            "-o", synced_srt,
+            "--max-offset-seconds", str(max_offset_seconds)
+        ]
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        if res.returncode == 0 and os.path.exists(synced_srt) and os.path.getsize(synced_srt) > 100:
+            log("AUTOSYNC", f"✅ Subtitles successfully synchronized with audio track -> {os.path.basename(synced_srt)}")
+            return synced_srt
+        else:
+            err_msg = res.stderr[:200] if res.stderr else "none"
+            log("AUTOSYNC", f"⚠️ ffsubsync notice (code {res.returncode}): {err_msg}. Keeping original subtitle timing.")
+    except Exception as e:
+        log("AUTOSYNC", f"⚠️ ffsubsync notice: {e}. Keeping original subtitle timing.")
+
+    return srt_path
+
 def download_subtitles_for_imdb(
     imdb_id: str,
     download_dir: str = DOWNLOAD_DIR,
@@ -1217,7 +1326,8 @@ def download_subtitles_for_imdb(
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
     }
 
-    log("SUBS", f"Searching highest-rated Arabic subtitle for IMDb ID '{imdb_id}'...")
+    source_release = str(kwargs.get("release_type") or kwargs.get("source_title") or kwargs.get("source_release") or "")
+    log("SUBS", f"Searching highest-rated Arabic subtitle for IMDb ID '{imdb_id}' (release hint: '{source_release}')...")
     arabic_sub_urls = []
 
     # 1. Try JSON endpoint first
@@ -1228,7 +1338,11 @@ def download_subtitles_for_imdb(
             data = r.json().get("subs", {}).get(imdb_id, {})
             arabic_subs = data.get("arabic", [])
             if arabic_subs:
-                sorted_subs = sorted(arabic_subs, key=lambda x: x.get("rating", 0), reverse=True)
+                sorted_subs = sorted(
+                    arabic_subs,
+                    key=lambda x: (score_release_match(x.get("url", ""), source_release), x.get("rating", 0) or 0),
+                    reverse=True
+                )
                 for s in sorted_subs:
                     u = s.get("url")
                     if u and u not in arabic_sub_urls:
@@ -1275,6 +1389,10 @@ def download_subtitles_for_imdb(
         log("SUBS", f"No Arabic subtitles found for IMDb ID {imdb_id}.")
         return None
 
+    # Prioritize candidate URLs by source release match (e.g. BluRay vs WEB-DL)
+    if source_release:
+        arabic_sub_urls.sort(key=lambda u: score_release_match(u, source_release), reverse=True)
+
     # 3. Candidate validation loop across candidate URLs & zip archives
     zip_mirrors = [
         "https://yifysubtitles.ch",
@@ -1305,8 +1423,13 @@ def download_subtitles_for_imdb(
                     if not srt_files:
                         continue
 
-                    # Prioritize .srt files matching *ara* or *arabic* in their filename
-                    sorted_files = sorted(srt_files, key=lambda x: 0 if ("arabic" in x.lower() or "ara" in x.lower()) else 1)
+                    # Prioritize .srt files matching source release type, then Arabic keywords
+                    def _srt_sort_key(f_name):
+                        lang_score = 10 if ("arabic" in f_name.lower() or "ara" in f_name.lower()) else 0
+                        rel_score = score_release_match(f_name, source_release)
+                        return (rel_score + lang_score)
+
+                    sorted_files = sorted(srt_files, key=_srt_sort_key, reverse=True)
                     for fname in sorted_files:
                         f_bytes = z.read(fname)
                         raw_text = decode_arabic_subtitle_bytes(f_bytes)
@@ -1369,6 +1492,7 @@ def download_subtitles_for_tv_episode(
     episode_tag_alt = f"{season_num}x{episode_num:02d}"
     log("SUBS", f"Searching Arabic subtitles for TV Episode {imdb_id} {episode_tag}...")
 
+    source_release = str(kwargs.get("release_type") or kwargs.get("source_title") or kwargs.get("source_release") or "")
     # 1. Primary: OpenSubtitles v3 series endpoint
     stremio_url = f"https://opensubtitles-v3.strem.io/subtitles/series/{imdb_id}:{season_num}:{episode_num}.json"
     try:
@@ -1386,6 +1510,7 @@ def download_subtitles_for_tv_episode(
                         score += 10
                     if cand.get("season") == season_num and cand.get("episode") == episode_num:
                         score += 20
+                    score += score_release_match(text_meta, source_release)
                     return score
 
                 sorted_ar_subs = sorted(ar_subs, key=_candidate_score, reverse=True)
@@ -1556,8 +1681,8 @@ def apply_ass_style(ass_text: str) -> str:
         return ""
 
     target_style = (
-        "Style: Default,Noto Sans Arabic,24,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,"
-        "1,0,0,0,100,100,0,0,1,1.4,0.8,2,20,20,28,1"
+        "Style: Default,Noto Sans Arabic,29,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,"
+        "0,0,0,0,100,100,0,0,1,0.8,0.4,2,20,20,10,1"
     )
 
     # 1. Update or inject PlayResX, PlayResY, ScaledBorderAndShadow under [Script Info]
@@ -1619,8 +1744,7 @@ def convert_srt_to_ass(srt_text: str, srt_path: str = None) -> str:
 
     # ── 0. Pre-clean: strip null bytes, BOMs, normalize newlines, purge bidi marks & tofu glyphs ──
     raw_text = srt_text.replace("\x00", "").lstrip("\ufeff\ufffe").replace("\r\n", "\n").replace("\r", "\n")
-    bidi_pattern = re.compile(r"[\u200e\u200f\u061c\u200b-\u200d\u202a-\u202e\u2066-\u2069\ufeff\ufffe\ufffd]")
-    cleaned = bidi_pattern.sub("", raw_text).strip()
+    cleaned = sanitize_subtitle_text(raw_text).strip()
     if not cleaned:
         return ""
 
@@ -1635,7 +1759,7 @@ def convert_srt_to_ass(srt_text: str, srt_path: str = None) -> str:
         "",
         "[V4+ Styles]",
         "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
-        "Style: Default,Noto Sans Arabic,24,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,1,0,0,0,100,100,0,0,1,1.4,0.8,2,20,20,28,1",
+        "Style: Default,Noto Sans Arabic,29,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0.8,0.4,2,20,20,10,1",
         "",
         "[Events]",
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
@@ -1661,8 +1785,7 @@ def convert_srt_to_ass(srt_text: str, srt_path: str = None) -> str:
     def _clean_line(line: str) -> str:
         """Strip HTML tags and residual control characters from a subtitle line."""
         c = re.sub(r'<[^>]+>', '', line.strip())
-        c = bidi_pattern.sub('', c)
-        return c
+        return sanitize_subtitle_text(c)
 
     # ── Primary parser: split by blank lines into blocks ──
     blocks = re.split(r'\n\s*\n', cleaned)
@@ -1942,7 +2065,7 @@ def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
     v_args_1080p = accel["video_args_1080p"]
 
     fonts_dir_opt = ":fontsdir='/content/fonts'" if os.path.exists("/content/fonts") else ""
-    sub_style = "FontName=Noto Sans Arabic,Bold=1,FontSize=24,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=1.4,Shadow=0.8,MarginV=28,Alignment=2"
+    sub_style = "FontName=Noto Sans Arabic,FontSize=29,Bold=0,Outline=0.8,Shadow=0.4,MarginV=10,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Alignment=2"
     sub_filter_rel = f"subtitles='sub.srt'{fonts_dir_opt}:force_style='{sub_style}'"
 
     # 4K Pre-scale Detection: If source is > 1080p (2160p/4K/UHD), prepend scale filter
@@ -2131,8 +2254,8 @@ def downscale_to_720p(input_1080p_path: str, output_720p_path: str = None) -> st
 
 def upload_to_vidmoly(video_path: str, api_key: str = VIDMOLY_API_KEY, max_retries: int = 3) -> str:
     """
-    Upload local video file to Vidmoly API and return clean embed URL: https://vidmoly.to/embed-{filecode}.html
-    1. Requests upload server slot: GET https://vidmoly.to/api/upload/server?key={api_key} (fallback vidmoly.me)
+    Upload local video file to Vidmoly API and return clean embed URL: https://vidmoly.me/embed-{filecode}.html
+    1. Requests upload server slot: GET https://vidmoly.me/api/upload/server?key={api_key} (fallback vidmoly.to)
     2. POST multipart video file to returned server URL.
     3. Extracts filecode and returns clean embed URL.
     Graceful handling: logs warning and returns None on failure.
@@ -2213,6 +2336,20 @@ def upload_to_vidmoly(video_path: str, api_key: str = VIDMOLY_API_KEY, max_retri
                     )
 
             resp_text = resp.text
+
+            # 1. Primary Vidmoly HTML Textarea Response Parser:
+            # e.g. <textarea name="op">upload_result</textarea><textarea name="fn">{filecode}</textarea><textarea name="st">OK</textarea>
+            match = re.search(r'<textarea\s+name=["\']fn["\']>([a-zA-Z0-9]+)</textarea>', resp_text, re.IGNORECASE)
+            if not match:
+                match = re.search(r'name=["\']fn["\']>([^<]+)<', resp_text)
+            if match:
+                filecode = match.group(1).strip()
+                if filecode:
+                    embed_url = f"https://vidmoly.me/embed-{filecode}.html"
+                    log("VIDMOLY", f"✅ Upload successful! Embed: {embed_url}")
+                    return embed_url
+
+            # 2. JSON & Legacy Fallbacks
             filecode = None
             try:
                 rj = resp.json()
@@ -2239,8 +2376,8 @@ def upload_to_vidmoly(video_path: str, api_key: str = VIDMOLY_API_KEY, max_retri
             if not filecode:
                 raise RuntimeError(f"Could not parse Vidmoly filecode from response: {resp_text[:300]}")
 
-            embed_url = f"https://vidmoly.to/embed-{filecode}.html"
-            log("VIDMOLY", f"✅ Upload successful! Filecode: {filecode} -> {embed_url}")
+            embed_url = f"https://vidmoly.me/embed-{filecode}.html"
+            log("VIDMOLY", f"✅ Upload successful! Embed: {embed_url}")
             return embed_url
 
         except Exception as e:
@@ -2256,7 +2393,7 @@ def upload_to_vidmoly(video_path: str, api_key: str = VIDMOLY_API_KEY, max_retri
 
 def upload_to_streamhg(video_path: str, api_key: str = STREAMHG_API_KEY, max_retries: int = 3) -> str:
     """
-    Upload local video file to StreamHG API and return clean embed URL: https://streamhg.com/e/{filecode}
+    Upload local video file to StreamHG API and return clean embed URL: https://hgcloud.to/e/{filecode}
     1. Requests upload server slot: GET https://streamhgapi.com/api/upload/server?key={api_key} (fallback streamhg.com)
     2. POST multipart video file to returned server URL with file and key.
     3. Extracts filecode and returns clean embed URL.
@@ -2357,7 +2494,7 @@ def upload_to_streamhg(video_path: str, api_key: str = STREAMHG_API_KEY, max_ret
             if not filecode:
                 raise RuntimeError(f"Could not parse StreamHG filecode from response: {resp_text[:300]}")
 
-            embed_url = f"https://streamhg.com/e/{filecode}"
+            embed_url = f"https://hgcloud.to/e/{filecode}"
             log("STREAMHG", f"✅ Upload successful! Filecode: {filecode} -> {embed_url}")
             return embed_url
 
@@ -3073,8 +3210,15 @@ def run_pipeline(movie_title: str, release_year: str = None, imdb_id: str = None
             if not raw_video_path or not os.path.exists(raw_video_path):
                 raise RuntimeError(f"All {max_tries} torrent candidates failed to download for TV episode '{parsed['show_name']} {parsed['episode_tag']}'.")
 
-            # 4. Fetch Arabic Subtitles (.srt) targeting exact Season & Episode
-            arabic_srt_path = download_subtitles_for_imdb(target_imdb, DOWNLOAD_DIR, season=parsed["season_number"], episode=parsed["episode_number"])
+            # 4. Fetch Arabic Subtitles (.srt) targeting exact Season & Episode with source release prioritization
+            source_title_info = target_torrent.get("title", "") if isinstance(target_torrent, dict) else os.path.basename(raw_video_path)
+            arabic_srt_path = download_subtitles_for_imdb(
+                target_imdb, DOWNLOAD_DIR,
+                season=parsed["season_number"],
+                episode=parsed["episode_number"],
+                source_title=source_title_info,
+                release_type=source_title_info
+            )
 
             # 5. Burn Arabic Subtitles directly into 1080p video frames once
             burned_1080p_path = burn_arabic_subtitles(raw_video_path, arabic_srt_path)
@@ -3249,8 +3393,13 @@ def run_pipeline(movie_title: str, release_year: str = None, imdb_id: str = None
             download_source = torrent_info["torrent_url"] or torrent_info["magnet_uri"]
             raw_video_path = download_with_aria2(download_source)
 
-            # 4. Fetch Arabic Subtitles (.srt)
-            arabic_srt_path = download_subtitles_for_imdb(target_imdb, DOWNLOAD_DIR)
+            # 4. Fetch Arabic Subtitles (.srt) with source release prioritization
+            source_title_info = torrent_info.get("title", "") if isinstance(torrent_info, dict) else os.path.basename(raw_video_path)
+            arabic_srt_path = download_subtitles_for_imdb(
+                target_imdb, DOWNLOAD_DIR,
+                source_title=source_title_info,
+                release_type=source_title_info
+            )
 
             # 5. Burn Arabic Subtitles directly into 1080p video frames once
             burned_1080p_path = burn_arabic_subtitles(raw_video_path, arabic_srt_path)

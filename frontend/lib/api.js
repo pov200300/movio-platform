@@ -97,6 +97,28 @@ export function enforceHttps(url) {
 }
 
 /**
+ * Normalizes any StreamHG / hgcloud embed URL to working https://hgcloud.to/e/{code} format
+ * Converts:
+ * - streamhg.com/e/{code} -> https://hgcloud.to/e/{code}
+ * - streamhg.com/{code}   -> https://hgcloud.to/e/{code}
+ * - streamhgapi.com/e/{code} -> https://hgcloud.to/e/{code}
+ * - streamhgapi.com/{code}   -> https://hgcloud.to/e/{code}
+ * - hgcloud.to/{code}     -> https://hgcloud.to/e/{code}
+ * - hgcloud.to/e/{code}   -> https://hgcloud.to/e/{code}
+ */
+export function normalizeStreamHgUrl(url) {
+  if (!url || typeof url !== 'string') return url;
+  const match = url.match(/(?:https?:\/\/)?(?:[a-zA-Z0-9.-]+\.)?(?:streamhg(?:api)?\.com|hgcloud\.to)\/(?:e\/|d\/|v\/|embed\/)?([a-zA-Z0-9_-]+)/i);
+  if (match && match[1]) {
+    const code = match[1];
+    if (!['api', 'upload', 'dl', 'contact', 'faq'].includes(code.toLowerCase())) {
+      return `https://hgcloud.to/e/${code}`;
+    }
+  }
+  return url;
+}
+
+/**
  * Extract featured image URL from an embedded WP post object or fallback
  */
 export function getFeaturedImage(post) {
@@ -123,6 +145,9 @@ export function getMovieEmbedUrl(post) {
             meta._stream_streamhg ||
             meta.streamhg_url ||
             meta.streamhg_embed ||
+            meta._stream_hgcloud ||
+            meta.hgcloud_url ||
+            meta.hgcloud_embed ||
             meta._stream_streamtape ||
             meta.streamtape_url ||
             meta.streamtape_embed ||
@@ -140,7 +165,7 @@ export function getMovieEmbedUrl(post) {
     if (serversMatch) {
       const commentStr = serversMatch[1];
       const vMatch = commentStr.match(/\bvidmoly=(https?:\/\/[^\s>]+)/i);
-      const hMatch = commentStr.match(/\bstreamhg=(https?:\/\/[^\s>]+)/i);
+      const hMatch = commentStr.match(/\b(?:streamhg|hgcloud)=(https?:\/\/[^\s>]+)/i);
       const sMatch = commentStr.match(/\bstreamtape=(https?:\/\/[^\s>]+)/i);
       const dMatch = commentStr.match(/\bdood=(https?:\/\/[^\s>]+)/i);
       url = (vMatch && vMatch[1]) || (hMatch && hMatch[1]) || (sMatch && sMatch[1]) || (dMatch && dMatch[1]);
@@ -152,7 +177,7 @@ export function getMovieEmbedUrl(post) {
     }
   }
 
-  return enforceHttps(url);
+  return normalizeStreamHgUrl(enforceHttps(url));
 }
 
 // Arabic translation map for TMDB genres
@@ -254,7 +279,8 @@ export function parseMovieData(post) {
   const meta = { ...(post.meta_input || {}), ...(post.meta || {}) };
 
   let vidmolyUrl = meta._stream_vidmoly || meta.vidmoly_url || meta.vidmoly_embed || null;
-  let streamhgUrl = meta._stream_streamhg || meta.streamhg_url || meta.streamhg_embed || null;
+  let streamhgUrl = meta._stream_streamhg || meta.streamhg_url || meta.streamhg_embed ||
+                    meta._stream_hgcloud || meta.hgcloud_url || meta.hgcloud_embed || null;
   let streamtapeUrl = meta._stream_streamtape || meta.streamtape_url || meta.streamtape_embed || null;
   let doodstreamUrl = meta._stream_doodstream || meta.doodstream_url || meta.dood_embed || null;
 
@@ -265,7 +291,7 @@ export function parseMovieData(post) {
   if (serversMatch) {
     const commentStr = serversMatch[1];
     const vMatch = commentStr.match(/\bvidmoly=(https?:\/\/[^\s>]+)/i);
-    const hMatch = commentStr.match(/\bstreamhg=(https?:\/\/[^\s>]+)/i);
+    const hMatch = commentStr.match(/\b(?:streamhg|hgcloud)=(https?:\/\/[^\s>]+)/i);
     const sMatch = commentStr.match(/\bstreamtape=(https?:\/\/[^\s>]+)/i);
     const dMatch = commentStr.match(/\bdood=(https?:\/\/[^\s>]+)/i);
 
@@ -279,7 +305,7 @@ export function parseMovieData(post) {
   if (!vidmolyUrl && meta.embed_url_1080p && meta.embed_url_1080p.includes('vidmoly')) {
     vidmolyUrl = meta.embed_url_1080p;
   }
-  if (!streamhgUrl && meta.embed_url_720p && meta.embed_url_720p.includes('streamhg')) {
+  if (!streamhgUrl && meta.embed_url_720p && (meta.embed_url_720p.includes('streamhg') || meta.embed_url_720p.includes('hgcloud'))) {
     streamhgUrl = meta.embed_url_720p;
   }
   if (!streamtapeUrl && meta.embed_url_720p && (meta.embed_url_720p.includes('streamtape') || meta.embed_url_720p.includes('tapecontent') || meta.embed_url_720p.includes('strtape'))) {
@@ -295,7 +321,7 @@ export function parseMovieData(post) {
     const fLower = fallbackEmbed.toLowerCase();
     if (!vidmolyUrl && fLower.includes('vidmoly')) {
       vidmolyUrl = fallbackEmbed;
-    } else if (!streamhgUrl && (fLower.includes('streamhg') || fLower.includes('streamhgapi'))) {
+    } else if (!streamhgUrl && (fLower.includes('streamhg') || fLower.includes('streamhgapi') || fLower.includes('hgcloud'))) {
       streamhgUrl = fallbackEmbed;
     } else if (!streamtapeUrl && (fLower.includes('streamtape') || fLower.includes('tapecontent') || fLower.includes('strtape'))) {
       streamtapeUrl = fallbackEmbed;
@@ -304,9 +330,9 @@ export function parseMovieData(post) {
     }
   }
 
-  // Enforce HTTPS
+  // Enforce HTTPS and normalize StreamHG / hgcloud domains to https://hgcloud.to/e/{code}
   vidmolyUrl = enforceHttps(vidmolyUrl);
-  streamhgUrl = enforceHttps(streamhgUrl);
+  streamhgUrl = normalizeStreamHgUrl(enforceHttps(streamhgUrl));
   streamtapeUrl = enforceHttps(streamtapeUrl);
   doodstreamUrl = enforceHttps(doodstreamUrl);
 
@@ -320,7 +346,10 @@ export function parseMovieData(post) {
     { id: 'streamhg', name: 'StreamHG (720p)', label: '⚡ سيرفر 2 (StreamHG 720p)', url: streamhgUrl, fast: true },
     { id: 'streamtape', name: 'Streamtape', label: '🌐 سيرفر 3 (Streamtape)', url: streamtapeUrl, fast: false },
     { id: 'doodstream', name: 'Doodstream', label: '🎬 سيرفر 4 (Doodstream)', url: doodstreamUrl, fast: false },
-  ].filter(s => !!s.url);
+  ].filter(s => !!s.url).map(s => ({
+    ...s,
+    url: normalizeStreamHgUrl(s.url)
+  }));
 
   // Fallback for older posts that have a single generic embed
   if (servers.length === 0 && primaryEmbed) {
@@ -457,10 +486,12 @@ export function parseMovieData(post) {
     primaryEmbed: primaryEmbed,
     vidmolyEmbed: vidmolyUrl,
     streamhgEmbed: streamhgUrl,
+    hgcloudEmbed: streamhgUrl,
     streamtapeEmbed: streamtapeUrl,
     doodEmbed: doodstreamUrl,
     vidmoly_url: vidmolyUrl,
     streamhg_url: streamhgUrl,
+    hgcloud_url: streamhgUrl,
     streamtape_url: streamtapeUrl,
     doodstream_url: doodstreamUrl,
     embedUrl1080p: vidmolyUrl || doodstreamUrl || primaryEmbed,
@@ -825,6 +856,7 @@ export async function getSeriesList({ search = '', category = null } = {}) {
                   primaryEmbed: movie.primaryEmbed,
                   vidmolyEmbed: movie.vidmolyEmbed,
                   streamhgEmbed: movie.streamhgEmbed,
+                  hgcloudEmbed: movie.streamhgEmbed,
                   doodEmbed: movie.doodEmbed,
                   streamtapeEmbed: movie.streamtapeEmbed,
                   embedUrl: movie.embedUrl,
@@ -912,6 +944,7 @@ export async function getSeriesBySlug(slug) {
                 primaryEmbed: movie.primaryEmbed,
                 vidmolyEmbed: movie.vidmolyEmbed,
                 streamhgEmbed: movie.streamhgEmbed,
+                hgcloudEmbed: movie.streamhgEmbed,
                 doodEmbed: movie.doodEmbed,
                 streamtapeEmbed: movie.streamtapeEmbed,
                 embedUrl: movie.embedUrl,

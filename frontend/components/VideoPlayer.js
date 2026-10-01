@@ -2,6 +2,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import Image from 'next/image';
 import CinemaPlayer from './CinemaPlayer';
+import { normalizeStreamHgUrl } from '../lib/api';
 import styles from './VideoPlayer.module.css';
 
 // Provider label mapping for clean Arabic display
@@ -17,11 +18,12 @@ function formatServerLabel(server, index) {
   if (server.label) return server.label;
   const id = (server.id || '').toLowerCase();
   const name = (server.name || '').toLowerCase();
+  const url = (server.url || '').toLowerCase();
 
   if (id === 'vidmoly' || name.includes('vidmoly')) {
     return PROVIDER_LABELS.vidmoly;
   }
-  if (id === 'streamhg' || name.includes('streamhg')) {
+  if (id === 'streamhg' || id === 'hgcloud' || name.includes('streamhg') || name.includes('hgcloud') || url.includes('hgcloud.to') || url.includes('streamhg')) {
     return PROVIDER_LABELS.streamhg;
   }
   if (id === 'streamtape' || name.includes('streamtape')) {
@@ -40,6 +42,7 @@ export default function VideoPlayer({
   primaryEmbed,
   vidmolyEmbed,
   streamhgEmbed,
+  hgcloudEmbed,
   streamtapeEmbed,
   doodEmbed,
   directStreamUrl,
@@ -60,13 +63,16 @@ export default function VideoPlayer({
     if (Array.isArray(servers) && servers.length > 0) {
       list = servers
         .filter((s) => s && s.url && typeof s.url === 'string')
-        .map((s, idx) => ({
-          id: s.id || `server-${idx + 1}`,
-          name: s.name || `Server ${idx + 1}`,
-          label: formatServerLabel(s, idx),
-          url: s.url,
-          fast: s.fast !== undefined ? s.fast : (s.id === 'vidmoly' || s.id === 'streamhg'),
-        }));
+        .map((s, idx) => {
+          const normUrl = normalizeStreamHgUrl(s.url);
+          return {
+            id: s.id || `server-${idx + 1}`,
+            name: s.name || `Server ${idx + 1}`,
+            label: formatServerLabel({ ...s, url: normUrl }, idx),
+            url: normUrl,
+            fast: s.fast !== undefined ? s.fast : (s.id === 'vidmoly' || s.id === 'streamhg' || s.id === 'hgcloud' || normUrl.includes('hgcloud.to')),
+          };
+        });
     }
 
     // Fallback: construct from individual embed props (for backwards compatibility)
@@ -90,15 +96,17 @@ export default function VideoPlayer({
         });
       }
 
-      // StreamHG
-      let hUrl = streamhgEmbed;
-      if (!hUrl && rawUrl && (rawUrl.toLowerCase().includes('streamhg') || rawUrl.toLowerCase().includes('streamhgapi'))) hUrl = rawUrl;
+      // StreamHG / HgCloud
+      let hUrl = streamhgEmbed || hgcloudEmbed;
+      if (!hUrl && rawUrl && (rawUrl.toLowerCase().includes('streamhg') || rawUrl.toLowerCase().includes('streamhgapi') || rawUrl.toLowerCase().includes('hgcloud'))) {
+        hUrl = rawUrl;
+      }
       if (hUrl) {
         list.push({
           id: 'streamhg',
           name: 'StreamHG (720p)',
           label: PROVIDER_LABELS.streamhg,
-          url: hUrl,
+          url: normalizeStreamHgUrl(hUrl),
           fast: true,
         });
       }
@@ -135,7 +143,7 @@ export default function VideoPlayer({
           id: 'default',
           name: 'السيرفر الأساسي',
           label: '🚀 السيرفر الأساسي',
-          url: rawUrl,
+          url: normalizeStreamHgUrl(rawUrl),
           fast: true,
         });
       }
@@ -148,7 +156,7 @@ export default function VideoPlayer({
       seenUrls.add(s.url);
       return true;
     });
-  }, [servers, embedUrl, primaryEmbed, vidmolyEmbed, streamhgEmbed, streamtapeEmbed, doodEmbed, embedHtml]);
+  }, [servers, embedUrl, primaryEmbed, vidmolyEmbed, streamhgEmbed, hgcloudEmbed, streamtapeEmbed, doodEmbed, embedHtml]);
 
   // Active Server ID: default to first available server in priority order
   const [activeServerId, setActiveServerId] = useState(() => resolvedServers[0]?.id || 'default');
@@ -383,7 +391,7 @@ export default function VideoPlayer({
         ) : embedHtml ? (
           <div 
             className={styles.iframeWrapper}
-            dangerouslySetInnerHTML={{ __html: embedHtml }} 
+            dangerouslySetInnerHTML={{ __html: embedHtml.replace(/(?:https?:\/\/)?(?:[a-zA-Z0-9.-]+\.)?(?:streamhg(?:api)?\.com|hgcloud\.to)\/(?:e\/)?([a-zA-Z0-9_-]+)/gi, 'https://hgcloud.to/e/$1') }} 
           />
         ) : (
           <div className={styles.demoWrapper}>
