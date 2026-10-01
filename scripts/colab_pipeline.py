@@ -91,38 +91,123 @@ FONTS_DIR = "/content/fonts" if os.path.exists("/content") else os.path.abspath(
 PREVIEW_MODE = os.getenv("PREVIEW_MODE", "false").lower() in ("true", "1", "yes")
 
 
-def setup_arabic_fonts(fonts_dir: str = FONTS_DIR) -> str:
+def get_system_fonts_dir() -> str:
     """
-    Direct Arabic font provisioning: ensures Noto Sans Arabic and Cairo font families
-    exist in fonts_dir with offline resilience and fontconfig cache update.
+    Dynamic font directory resolver:
+    Checks candidate directories in order of priority:
+      1. /usr/share/fonts/truetype/noto (Standard system font path)
+      2. ~/.local/share/fonts (User font path)
+      3. /content/fonts (Google Colab font path)
+    Returns the first existing directory containing .ttf files,
+    or creates and returns /usr/share/fonts/truetype/noto (with graceful permission fallbacks).
     """
+    candidates = [
+        "/usr/share/fonts/truetype/noto",
+        os.path.expanduser("~/.local/share/fonts"),
+        "/content/fonts",
+    ]
+    for c in candidates:
+        if os.path.isdir(c):
+            try:
+                ttf_files = [f for f in os.listdir(c) if f.lower().endswith(".ttf")]
+                if ttf_files:
+                    return c
+            except Exception:
+                pass
+
+    for c in candidates:
+        try:
+            os.makedirs(c, exist_ok=True)
+            if os.path.isdir(c) and os.access(c, os.W_OK):
+                return c
+        except Exception:
+            continue
+
+    fallback = os.path.abspath("./fonts")
+    os.makedirs(fallback, exist_ok=True)
+    return fallback
+
+
+def setup_environment(fonts_dir: str = None) -> str:
+    """
+    System & Environment Provisioning:
+    1. Installs system packages: fonts-noto-core, fonts-noto-extra, fonts-amiri, fontconfig via apt if available.
+    2. Provisions Noto Sans Arabic fonts into standard system paths (/usr/share/fonts/truetype/noto).
+    3. Executes fc-cache -fv to register fonts in fontconfig.
+    4. Automated verification: tests fc-match "Noto Sans Arabic" and logs result.
+    """
+    if not fonts_dir:
+        fonts_dir = get_system_fonts_dir()
+
+    # 1. Install required apt packages on Debian/Ubuntu/Colab/Lightning.ai if root
+    if sys.platform.startswith("linux") and shutil.which("apt-get"):
+        try:
+            pkgs = ["fonts-noto-core", "fonts-noto-extra", "fonts-amiri", "fontconfig"]
+            cmd = ["apt-get", "install", "-y", "-qq"] + pkgs
+            subprocess.run(cmd, capture_output=True, timeout=120)
+        except Exception as e:
+            log("FONTS", f"Apt font package notice: {e}")
+
     try:
         os.makedirs(fonts_dir, exist_ok=True)
         fonts = [
-            ("NotoSansArabic-Bold.ttf", "https://github.com/googlefonts/noto-fonts/raw/main/hinted/ttf/NotoSansArabic/NotoSansArabic-Bold.ttf"),
             ("NotoSansArabic-Regular.ttf", "https://github.com/googlefonts/noto-fonts/raw/main/hinted/ttf/NotoSansArabic/NotoSansArabic-Regular.ttf"),
+            ("NotoSansArabic-Bold.ttf", "https://github.com/googlefonts/noto-fonts/raw/main/hinted/ttf/NotoSansArabic/NotoSansArabic-Bold.ttf"),
             ("Cairo-SemiBold.ttf", "https://github.com/google/fonts/raw/main/ofl/cairo/static/Cairo-SemiBold.ttf"),
         ]
         for font_name, url in fonts:
             font_file = os.path.join(fonts_dir, font_name)
             if not os.path.exists(font_file) or os.path.getsize(font_file) == 0:
-                log("FONTS", f"Downloading Arabic font to {font_file}...")
+                log("FONTS", f"Provisioning Arabic font to {font_file}...")
                 try:
-                    r = requests.get(url, timeout=12)
+                    r = requests.get(url, timeout=15)
                     if r.status_code == 200 and len(r.content) > 1000:
                         with open(font_file, "wb") as f:
                             f.write(r.content)
-                        log("FONTS", f"✅ Font downloaded -> {font_name}")
+                        log("FONTS", f"✅ Font provisioned -> {font_name}")
                 except Exception as dl_err:
                     log("FONTS", f"Notice downloading {font_name}: {dl_err}")
 
+        # Also sync fonts to /content/fonts if running in Colab for dual-path availability
+        if os.path.exists("/content") and fonts_dir != "/content/fonts":
+            try:
+                os.makedirs("/content/fonts", exist_ok=True)
+                for font_name, _ in fonts:
+                    src = os.path.join(fonts_dir, font_name)
+                    dst = os.path.join("/content/fonts", font_name)
+                    if os.path.exists(src) and not os.path.exists(dst):
+                        shutil.copy2(src, dst)
+            except Exception:
+                pass
+
         fc_bin = shutil.which("fc-cache")
         if fc_bin:
-            subprocess.run([fc_bin, "-fv", fonts_dir], capture_output=True)
+            try:
+                subprocess.run([fc_bin, "-fv", fonts_dir], capture_output=True, timeout=30)
+                if os.path.exists("/content/fonts"):
+                    subprocess.run([fc_bin, "-fv", "/content/fonts"], capture_output=True, timeout=30)
+            except Exception as fc_err:
+                log("FONTS", f"fc-cache notice: {fc_err}")
+
+        # Automated verification: test fc-match "Noto Sans Arabic"
+        fc_match_bin = shutil.which("fc-match")
+        if fc_match_bin:
+            try:
+                match_proc = subprocess.run([fc_match_bin, "Noto Sans Arabic"], capture_output=True, text=True, timeout=10)
+                match_out = match_proc.stdout.strip()
+                log("FONTS", f"Font verification fc-match 'Noto Sans Arabic': {match_out}")
+                if "noto" not in match_out.lower() and "arabic" not in match_out.lower() and "amiri" not in match_out.lower():
+                    log("FONTS", f"⚠️ Warning: fc-match resolved to '{match_out}' instead of genuine Arabic font. Enforcing explicit :fontsdir fallback.")
+            except Exception as match_err:
+                log("FONTS", f"fc-match notice: {match_err}")
+
         return fonts_dir
     except Exception as e:
         log("FONTS", f"Notice on Arabic font setup (offline/fallback mode): {e}")
         return fonts_dir
+
+
+setup_arabic_fonts = setup_environment
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -2528,9 +2613,10 @@ def burn_arabic_subtitles(video_path: str, srt_path: str, sub_offset_seconds: fl
     accel = detect_hardware_acceleration()
     v_args_1080p = accel["video_args_1080p"]
 
-    fonts_dir_opt = ":fontsdir='/content/fonts'" if os.path.exists("/content/fonts") else ""
+    fonts_dir = get_system_fonts_dir()
+    fonts_dir_escaped = fonts_dir.replace("\\", "/").replace(":", r"\:")
     sub_style = "FontName=Noto Sans Arabic,FontSize=29,Bold=0,Outline=0.8,Shadow=0.4,MarginV=10,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Alignment=2"
-    sub_filter_rel = f"subtitles='sub.srt'{fonts_dir_opt}:force_style='{sub_style}'"
+    sub_filter_rel = f"subtitles='sub.srt':fontsdir='{fonts_dir_escaped}':force_style='{sub_style}'"
 
     # 4K Pre-scale Detection: If source is > 1080p (2160p/4K/UHD), prepend scale filter
     # before subtitle burn-in to avoid libass rendering on 8.3M-pixel frames (boosts NVENC 0.4x -> 2.5x)
@@ -2556,7 +2642,7 @@ def burn_arabic_subtitles(video_path: str, srt_path: str, sub_offset_seconds: fl
             log("HARDSUB", "4K/UHD source detected (filename match). Pre-scaling to 1080p before subtitle rendering.")
 
     if is_4k_source:
-        sub_filter_rel = f"scale=-2:1080,subtitles='sub.srt'{fonts_dir_opt}:force_style='{sub_style}'"
+        sub_filter_rel = f"scale=-2:1080,subtitles='sub.srt':fontsdir='{fonts_dir_escaped}':force_style='{sub_style}'"
 
     ffmpeg_log = os.path.join(staging_dir, "ffmpeg_process.log")
     log("HARDSUB", f"Burning Arabic subtitles into 1080p frames ({accel['description']}): output_1080p.mp4 in {staging_dir}...")
@@ -2582,9 +2668,9 @@ def burn_arabic_subtitles(video_path: str, srt_path: str, sub_offset_seconds: fl
         log("HARDSUB", f"Notice on relative subtitle filter ({proc.returncode}): {err_snippet}. Retrying with escaped absolute subtitle path...")
         sub_abs_escaped = os.path.abspath(staged_clean_srt).replace("\\", "/").replace(":", r"\:")
         if is_4k_source:
-            sub_filter_abs = f"scale=-2:1080,subtitles='{sub_abs_escaped}'{fonts_dir_opt}:force_style='{sub_style}'"
+            sub_filter_abs = f"scale=-2:1080,subtitles='{sub_abs_escaped}':fontsdir='{fonts_dir_escaped}':force_style='{sub_style}'"
         else:
-            sub_filter_abs = f"subtitles='{sub_abs_escaped}'{fonts_dir_opt}:force_style='{sub_style}'"
+            sub_filter_abs = f"subtitles='{sub_abs_escaped}':fontsdir='{fonts_dir_escaped}':force_style='{sub_style}'"
         cmd_abs = [
             "ffmpeg", "-y", "-nostdin",
             "-i", ffmpeg_input,
@@ -2788,13 +2874,14 @@ def generate_60s_preview_sample(
 
     # Burn subtitles into preview sample in ~10 seconds
     log("PREVIEW", "🔥 Burning subtitles into 60s preview sample...")
-    fonts_dir_opt = ":fontsdir='/content/fonts'" if os.path.exists("/content/fonts") else ""
+    fonts_dir = get_system_fonts_dir()
+    fonts_dir_escaped = fonts_dir.replace('\\', '/').replace(':', '\\:')
     sub_style = "FontName=Noto Sans Arabic,FontSize=29,Bold=0,Outline=0.8,Shadow=0.4,MarginV=10,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Alignment=2"
 
     burn_cmd = [ffmpeg_bin, "-y", "-nostdin", "-i", preview_raw_clip]
     if has_subs and os.path.exists(preview_sliced_srt):
         escaped_srt = preview_sliced_srt.replace('\\', '/').replace(':', '\\:')
-        sub_filter = f"subtitles='{escaped_srt}'{fonts_dir_opt}:force_style='{sub_style}'"
+        sub_filter = f"subtitles='{escaped_srt}':fontsdir='{fonts_dir_escaped}':force_style='{sub_style}'"
         burn_cmd.extend(["-vf", sub_filter])
     burn_cmd.extend([
         "-c:v", "libx264", "-preset", "ultrafast", "-crf", "22",
@@ -3739,6 +3826,7 @@ def run_pipeline(
         print(f"  ⚡ FAST 60S PREVIEW MODE ACTIVE (Start: {preview_start_time}, Offset: {sub_offset_seconds}s)")
     print("=" * 75)
     detect_hardware_acceleration()
+    setup_environment()
 
     parsed = parse_media_item(movie_title)
     is_episode = parsed.get("is_episode", False)
