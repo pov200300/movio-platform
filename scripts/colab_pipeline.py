@@ -993,21 +993,26 @@ def download_with_aria2(torrent_source: str, download_dir: str = DOWNLOAD_DIR, s
     return target_video
 
 def sanitize_subtitle_text(text: str) -> str:
-    """
-    Sanitize decoded subtitle text to eliminate libass rendering artifacts and tofu boxes ([]):
-    - Normalizes Lam-Alif presentation forms (U+FEF5 through U+FEFC) to standard Lam + Alif
-      to eliminate [] tofu boxes around words like "علاقة" and "مارلا".
-    - Unicode NFKC normalization: decomposes presentation form ligatures into standard Unicode.
-    - Strips ALL Arabic diacritics / tashkeel / harakat / tatweel completely:
-      re.sub(r'[\u064B-\u065F\u0670\u0640]', '', text)
-    - Purges directional and bidirectional formatting marks, zero-width codes, and BOM marks.
-    - Normalizes line endings to standard Unix \n and strips null bytes.
+    r"""
+    Sanitize decoded subtitle text using a strict whitelist to purge all tofu boxes ([]),
+    broken ligatures, and unsupported characters:
+    1. Normalize Unicode via unicodedata.normalize('NFKC', text)
+    2. Explicitly map Lam-Alif ligatures (\uFEF5 through \uFEFC) and decomposed forms to standard characters ('لا', 'لأ', 'لإ', 'لآ')
+    3. Remove Tatweel/Kashida ('\u0640' and 'ـ') completely
+    4. Strip all Tashkeel / Harakat ([\u064B-\u065F\u0670])
+    5. Strip all brackets, braces, and quotes ([\(\)\[\]\{\}\<\>«»“"”‘’\'`\\])
+    6. Apply STRICT WHITELIST regex:
+       text = re.sub(r'[^\u0621-\u064A\u0660-\u0669a-zA-Z0-9\s\.\,\!\?\:\-\،\؟]', '', text)
+    7. Collapse consecutive spaces.
     """
     if not text:
         return ""
     text = text.replace("\x00", "").replace("\r\n", "\n").replace("\r", "\n")
 
-    # 1. Normalize Lam-Alif presentation forms (U+FEF5 through U+FEFC) to standard Lam + Alif
+    # 1. Unicode NFKC normalization
+    text = unicodedata.normalize("NFKC", text)
+
+    # 2. Explicitly map Lam-Alif ligatures (\uFEF5 through \uFEFC) to standard characters
     lam_alif_map = {
         '\uFEF5': '\u0644\u0622',  # Isolated Lam with Alef with Madda -> لآ
         '\uFEF6': '\u0644\u0622',  # Final Lam with Alef with Madda -> لآ
@@ -1021,21 +1026,37 @@ def sanitize_subtitle_text(text: str) -> str:
     for char, rep in lam_alif_map.items():
         text = text.replace(char, rep)
 
-    # 2. Unicode NFKC normalization: decomposes presentation form ligatures into standard Unicode
-    text = unicodedata.normalize("NFKC", text)
+    # 3. Remove Tatweel/Kashida ('\u0640' and 'ـ') completely
+    text = text.replace('\u0640', '').replace('ـ', '')
 
-    # 3. Strip ALL Arabic diacritics / tashkeel / harakat / tatweel completely
-    # (Fatha, Damma, Kasra, Sukun, Tanween variants, Shadda, Dagger Alif, Tatweel)
-    text = re.sub(r'[\u064B-\u065F\u0670\u0640]', '', text)
-    text = text.replace("ـ", "")
+    # 4. Strip all Tashkeel / Harakat ([\u064B-\u065F\u0670])
+    text = re.sub(r'[\u064B-\u065F\u0670]', '', text)
 
-    # 4. Purge directional / bidirectional formatting marks, zero-width characters, BOM, replacement glyphs
-    tofu_and_bidi_pattern = re.compile(
-        r"[\u200e\u200f\u202a-\u202e\u200b\u200c\u200d\ufeff\ufffe\ufffd\u061c\u2066-\u2069\u034f\u00ad]"
-    )
-    text = tofu_and_bidi_pattern.sub("", text)
+    # Strip HTML formatting tags first (e.g. <i>, <b>, <font...>)
+    text = re.sub(r'<[^>]+>', '', text)
 
-    return text
+    # Preserve SRT timestamp arrows if whole subtitle content is passed
+    has_arrows = "-->" in text
+    if has_arrows:
+        text = text.replace("-->", "SRTARROWTOKEN")
+
+    # 5. Strip all brackets, braces, and quotes ([\(\)\[\]\{\}\<\>«»“"”‘’\'`\\])
+    text = re.sub(r'[\(\)\[\]\{\}\<\>«»“"”‘’\'`\\]', '', text)
+
+    # 6. Apply STRICT WHITELIST regex:
+    # Only Arabic letters, Arabic-Indic digits, ASCII digits, English letters, whitespace,
+    # and standard punctuation (. , ! ? : - ، ؟)
+    text = re.sub(r'[^\u0621-\u064A\u0660-\u0669a-zA-Z0-9\s\.\,\!\?\:\-\،\؟]', '', text)
+
+    if has_arrows:
+        text = text.replace("SRTARROWTOKEN", "-->")
+
+    # 7. Collapse consecutive spaces and clean blank lines
+    text = re.sub(r'[ \t]+', ' ', text)
+    text = re.sub(r' *\n *', '\n', text)
+
+    return text.strip()
+
 
 
 def decode_arabic_subtitle_bytes(raw_bytes: bytes) -> str:
@@ -1122,11 +1143,65 @@ def fix_arabic_mojibake(text: str) -> str:
     return text
 
 
-def sanitize_subtitle_file(input_srt_path: str, output_srt_path: str = None) -> str:
+def srt_ts_to_seconds(ts: str) -> float:
+    """Parse SRT timestamp (HH:MM:SS,mmm or H:MM:SS.mm) to float seconds."""
+    ts = ts.strip().replace(',', '.')
+    parts = ts.split(':')
+    h = int(parts[0])
+    m = int(parts[1])
+    s = float(parts[2])
+    return h * 3600.0 + m * 60.0 + s
+
+
+def seconds_to_srt_ts(seconds: float) -> str:
+    """Convert float seconds to SRT timestamp HH:MM:SS,mmm."""
+    seconds = max(0.0, float(seconds))
+    total_ms = int(round(seconds * 1000.0))
+    ms = total_ms % 1000
+    total_sec = total_ms // 1000
+    s = total_sec % 60
+    total_min = total_sec // 60
+    m = total_min % 60
+    h = total_min // 60
+    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+
+def seconds_to_ass_ts(seconds: float) -> str:
+    """Convert float seconds to ASS timestamp H:MM:SS.cc."""
+    seconds = max(0.0, float(seconds))
+    total_cs = int(round(seconds * 100.0))
+    cs = total_cs % 100
+    total_sec = total_cs // 100
+    s = total_sec % 60
+    total_min = total_sec // 60
+    m = total_min % 60
+    h = total_min // 60
+    return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
+
+
+def clamp_subtitle_duration(start_sec: float, end_sec: float, text: str) -> float:
+    """
+    Clamp dialogue end time so subtitles never hang:
+      max_duration = max(2.2, min(5.0, len(clean_text) * 0.08 + 1.2))
+      if (end_time - start_time) > max_duration: end_time = start_time + max_duration
+    Guarantees captions disappear naturally 2.2 - 5.0s after the actor finishes speaking
+    instead of remaining frozen until the next dialogue.
+    """
+    clean_text = re.sub(r'<[^>]+>', '', text)
+    clean_text = re.sub(r'\{[^}]+\}', '', clean_text).strip()
+    max_duration = max(2.2, min(5.0, len(clean_text) * 0.08 + 1.2))
+    if (end_sec - start_sec) > max_duration:
+        return start_sec + max_duration
+    return end_sec
+
+
+def sanitize_srt_file(input_srt_path: str, output_srt_path: str = None, offset_seconds: float = 0.0) -> str:
     """
     Auto-detect and decode incoming SRT files across common encodings:
     ('utf-8', 'utf-8-sig', 'windows-1256', 'cp1256', 'iso-8859-6').
-    Applies mojibake auto-repair and comprehensive bidi/tofu-box Unicode cleaning.
+    Applies mojibake auto-repair, full bracket/tofu/bidi symbol purging,
+    optional micro-timing offset adjustment (offset_seconds), and
+    smart subtitle duration clamping (max_duration = max(2.2, min(5.0, L * 0.08 + 1.2))).
     Re-saves the sanitized file strictly in clean UTF-8 without BOM.
     """
     if not input_srt_path or not os.path.exists(input_srt_path):
@@ -1139,12 +1214,156 @@ def sanitize_subtitle_file(input_srt_path: str, output_srt_path: str = None) -> 
 
     decoded = decode_arabic_subtitle_bytes(raw_bytes)
     repaired = fix_arabic_mojibake(decoded)
-    clean_text = sanitize_subtitle_text(repaired)
+    raw_cleaned = repaired.replace("\x00", "").replace("\r\n", "\n").replace("\r", "\n")
+
+    time_pattern = re.compile(
+        r"(\d{1,2}:\d{2}:\d{2}[,\.]\d{1,3})\s*(?:-->|->|—>|–>)\s*(\d{1,2}:\d{2}:\d{2}[,\.]\d{1,3})"
+    )
+
+    blocks = re.split(r'\n\s*\n', raw_cleaned.strip())
+    new_blocks = []
+    idx = 1
+
+    for block in blocks:
+        lines = block.strip().split('\n')
+        if len(lines) < 2:
+            continue
+        tm = None
+        timing_idx = -1
+        for i, line in enumerate(lines):
+            tm = time_pattern.search(line)
+            if tm:
+                timing_idx = i
+                break
+        if not tm or timing_idx < 0:
+            continue
+
+        start_sec = max(0.0, srt_ts_to_seconds(tm.group(1)) + offset_seconds)
+        end_sec = max(0.0, srt_ts_to_seconds(tm.group(2)) + offset_seconds)
+
+        cleaned_text_lines = [sanitize_subtitle_text(tl) for tl in lines[timing_idx + 1:]]
+        cleaned_text_lines = [tl for tl in cleaned_text_lines if tl]
+        if not cleaned_text_lines:
+            continue
+
+        full_dialogue = "\n".join(cleaned_text_lines)
+        clamped_end = clamp_subtitle_duration(start_sec, end_sec, full_dialogue)
+
+        start_str = seconds_to_srt_ts(start_sec)
+        end_str = seconds_to_srt_ts(clamped_end)
+        new_blocks.append(f"{idx}\n{start_str} --> {end_str}\n{full_dialogue}")
+        idx += 1
+
+    # Fallback Sequential Parser if blocks splitting yielded 0 entries
+    if not new_blocks:
+        lines = raw_cleaned.split('\n')
+        current_start = None
+        current_end = None
+        current_text_parts = []
+
+        def _append_seq_block():
+            nonlocal idx
+            if current_start and current_end and current_text_parts:
+                start_sec = max(0.0, srt_ts_to_seconds(current_start) + offset_seconds)
+                end_sec = max(0.0, srt_ts_to_seconds(current_end) + offset_seconds)
+                full_dialogue = "\n".join(current_text_parts)
+                clamped_end = clamp_subtitle_duration(start_sec, end_sec, full_dialogue)
+                start_str = seconds_to_srt_ts(start_sec)
+                end_str = seconds_to_srt_ts(clamped_end)
+                new_blocks.append(f"{idx}\n{start_str} --> {end_str}\n{full_dialogue}")
+                idx += 1
+
+        for line in lines:
+            line_str = line.strip()
+            if not line_str:
+                continue
+            tm = time_pattern.search(line_str)
+            if tm:
+                _append_seq_block()
+                current_start = tm.group(1)
+                current_end = tm.group(2)
+                current_text_parts = []
+            elif current_start is not None:
+                c_text = sanitize_subtitle_text(line_str)
+                if c_text and not c_text.isdigit():
+                    current_text_parts.append(c_text)
+        _append_seq_block()
+
+    if new_blocks:
+        final_srt = "\n\n".join(new_blocks) + "\n"
+    else:
+        final_srt = sanitize_subtitle_text(raw_cleaned)
 
     with open(output_srt_path, "w", encoding="utf-8", newline="\n") as f:
-        f.write(clean_text)
+        f.write(final_srt)
 
     return output_srt_path
+
+
+def parse_time_to_seconds(t_str: str) -> float:
+    """Parse timestamp string (HH:MM:SS or MM:SS or seconds) into float seconds."""
+    if not t_str:
+        return 0.0
+    t_str = str(t_str).strip()
+    if ":" in t_str:
+        parts = t_str.split(":")
+        try:
+            if len(parts) == 3:
+                return float(parts[0]) * 3600.0 + float(parts[1]) * 60.0 + float(parts[2])
+            elif len(parts) == 2:
+                return float(parts[0]) * 60.0 + float(parts[1])
+        except Exception:
+            return 150.0
+    try:
+        return float(t_str)
+    except Exception:
+        return 150.0
+
+
+def slice_srt_content_for_preview(srt_text: str, preview_start_sec: float, preview_duration_sec: float = 60.0) -> str:
+    """
+    Slice SRT subtitle entries to fit within a preview window [preview_start_sec, preview_start_sec + preview_duration_sec].
+    Re-bases the timestamps so that preview_start_sec corresponds to 00:00:00,000.
+    """
+    if not srt_text:
+        return ""
+    preview_end_sec = preview_start_sec + preview_duration_sec
+    time_pattern = re.compile(
+        r"(\d{1,2}:\d{2}:\d{2}[,\.]\d{1,3})\s*(?:-->|->|—>|–>)\s*(\d{1,2}:\d{2}:\d{2}[,\.]\d{1,3})"
+    )
+    blocks = re.split(r'\n\s*\n', srt_text.strip())
+    new_blocks = []
+    idx = 1
+    for block in blocks:
+        lines = block.strip().split('\n')
+        if len(lines) < 2:
+            continue
+        tm = None
+        timing_idx = -1
+        for i, line in enumerate(lines):
+            tm = time_pattern.search(line)
+            if tm:
+                timing_idx = i
+                break
+        if not tm or timing_idx < 0:
+            continue
+        s_sec = srt_ts_to_seconds(tm.group(1))
+        e_sec = srt_ts_to_seconds(tm.group(2))
+        if e_sec >= preview_start_sec and s_sec <= preview_end_sec:
+            clip_s = max(0.0, s_sec - preview_start_sec)
+            clip_e = min(preview_duration_sec, e_sec - preview_start_sec)
+            if clip_e > clip_s + 0.1:
+                dialogue = "\n".join([tl for tl in lines[timing_idx + 1:] if tl.strip()])
+                start_str = seconds_to_srt_ts(clip_s)
+                end_str = seconds_to_srt_ts(clip_e)
+                new_blocks.append(f"{idx}\n{start_str} --> {end_str}\n{dialogue}")
+                idx += 1
+    return "\n\n".join(new_blocks) + "\n" if new_blocks else ""
+
+
+# Backwards compatibility alias
+sanitize_subtitle_file = sanitize_srt_file
+
 
 
 def decode_arabic_subtitle(raw_bytes: bytes) -> tuple:
@@ -1721,12 +1940,13 @@ def apply_ass_style(ass_text: str) -> str:
 
     return ass_text
 
-def convert_srt_to_ass(srt_text: str, srt_path: str = None) -> str:
+def convert_srt_to_ass(srt_text: str, srt_path: str = None, offset_seconds: float = 0.0) -> str:
     """
     Convert SRT subtitle text to ASS (Advanced SubStation Alpha) format with
     embedded Arabic styling on a 1080p virtual canvas. Bypasses FFmpeg's SRT demuxer
     (avformat_open_input) which fails with 'Unable to open' on certain Arabic-encoded subtitle content,
     by producing a pre-formatted ASS file that libass reads directly via the 'ass' filter.
+    Supports micro-timing offset adjustment via offset_seconds.
 
     Resilient against:
       - Null bytes (\\x00) and UTF-8/16 BOMs (\\ufeff\\ufffe)
@@ -1807,14 +2027,17 @@ def convert_srt_to_ass(srt_text: str, srt_path: str = None) -> str:
         if not tm or timing_idx < 0:
             continue
 
-        start_ass = _srt_ts_to_ass(tm.group(1))
-        end_ass = _srt_ts_to_ass(tm.group(2))
+        start_sec = max(0.0, srt_ts_to_seconds(tm.group(1)) + offset_seconds)
+        end_sec = max(0.0, srt_ts_to_seconds(tm.group(2)) + offset_seconds)
 
         text_parts = [_clean_line(tl) for tl in lines[timing_idx + 1:] if _clean_line(tl)]
         if not text_parts:
             continue
 
         text = '\\N'.join(text_parts)
+        clamped_end = clamp_subtitle_duration(start_sec, end_sec, text)
+        start_ass = seconds_to_ass_ts(start_sec)
+        end_ass = seconds_to_ass_ts(clamped_end)
         dialogues.append(f"Dialogue: 0,{start_ass},{end_ass},Default,,0,0,0,,{text}")
 
     # ── Fallback Sequential Parser: if block splitting yielded 0 entries ──
@@ -1826,9 +2049,12 @@ def convert_srt_to_ass(srt_text: str, srt_path: str = None) -> str:
 
         def _append_seq_dialogue():
             if current_start and current_end and current_text_parts:
-                start_ass = _srt_ts_to_ass(current_start)
-                end_ass = _srt_ts_to_ass(current_end)
+                start_sec = max(0.0, srt_ts_to_seconds(current_start) + offset_seconds)
+                end_sec = max(0.0, srt_ts_to_seconds(current_end) + offset_seconds)
                 text = '\\N'.join(current_text_parts)
+                clamped_end = clamp_subtitle_duration(start_sec, end_sec, text)
+                start_ass = seconds_to_ass_ts(start_sec)
+                end_ass = seconds_to_ass_ts(clamped_end)
                 dialogues.append(f"Dialogue: 0,{start_ass},{end_ass},Default,,0,0,0,,{text}")
 
         for line in lines:
@@ -1968,11 +2194,12 @@ def detect_hardware_acceleration(force_refresh: bool = False) -> dict:
 
     return _HW_ACCEL_CONFIG
 
-def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
+def burn_arabic_subtitles(video_path: str, srt_path: str, sub_offset_seconds: float = 0.0) -> str:
     """
     Burn Arabic subtitles directly into 1080p video frames (hardsubbing) using FFmpeg.
     Auto-detects and leverages NVIDIA NVENC hardware acceleration when a GPU is present,
     dynamically falling back to multi-threaded CPU libx264 (all cores) on CPU runtimes.
+    Supports micro-timing offset adjustment via sub_offset_seconds.
     Maintains -y, -nostdin, and direct log redirection to prevent OS pipe deadlocks.
     """
     if not video_path or not os.path.exists(video_path):
@@ -2025,7 +2252,7 @@ def burn_arabic_subtitles(video_path: str, srt_path: str) -> str:
     try:
         with open(staged_clean_srt, 'w', encoding='utf-8', newline='\n') as csf:
             csf.write(clean_sub_text)
-        sanitize_subtitle_file(staged_clean_srt, staged_clean_srt)
+        sanitize_subtitle_file(staged_clean_srt, staged_clean_srt, offset_seconds=sub_offset_seconds)
     except Exception as e:
         log("HARDSUB", f"⚠️ Could not write {staged_clean_srt}: {e}")
         staged_clean_srt = srt_path
@@ -2245,6 +2472,107 @@ def downscale_to_720p(input_1080p_path: str, output_720p_path: str = None) -> st
     log("HARDSUB", f"✅ 720p downscaling complete ({mb:.1f} MB) -> {os.path.basename(output_720p_path)}")
     return output_720p_path
 
+
+def generate_60s_preview_sample(
+    video_path: str,
+    srt_path: str,
+    preview_start_time: str = "00:02:30",
+    sub_offset_seconds: float = 0.0,
+    output_path: str = None
+) -> str:
+    """
+    Generate a fast 60-second preview clip with burned-in Arabic subtitles:
+    1. Extracts a 60-second video segment starting at preview_start_time.
+    2. Slices the sanitized Arabic subtitles to match that 60-second window.
+    3. Burns subtitles into preview_sample.mp4 in ~10 seconds.
+    """
+    if not video_path or not os.path.exists(video_path):
+        raise FileNotFoundError(f"Video file not found: {video_path}")
+
+    ffmpeg_bin = shutil.which("ffmpeg")
+    if not ffmpeg_bin:
+        raise RuntimeError("ffmpeg not found in PATH; cannot generate preview sample.")
+
+    preview_dir = "/content/preview" if os.path.exists("/content") else os.path.abspath("./staging_temp/preview")
+    os.makedirs(preview_dir, exist_ok=True)
+
+    if not output_path:
+        output_path = os.path.join(preview_dir, "preview_sample.mp4")
+
+    preview_raw_clip = os.path.join(preview_dir, "clip_60s_raw.mp4")
+    preview_sliced_srt = os.path.join(preview_dir, "preview_sub.srt")
+
+    for p in [preview_raw_clip, preview_sliced_srt, output_path]:
+        if os.path.exists(p):
+            try: os.remove(p)
+            except Exception: pass
+
+    preview_start_sec = parse_time_to_seconds(preview_start_time)
+    log("PREVIEW", f"🎬 Extracting 60s video clip at start time {preview_start_time} ({preview_start_sec}s)...")
+
+    # Fast 60s clip extraction with ultrafast re-encode for keyframe accuracy
+    extract_cmd = [
+        ffmpeg_bin, "-y", "-nostdin",
+        "-ss", str(preview_start_time),
+        "-i", video_path,
+        "-t", "60",
+        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "22",
+        "-c:a", "aac", "-b:a", "128k",
+        preview_raw_clip
+    ]
+    res = subprocess.run(extract_cmd, capture_output=True, text=True, timeout=90)
+    if res.returncode != 0 or not os.path.exists(preview_raw_clip) or os.path.getsize(preview_raw_clip) == 0:
+        raise RuntimeError(f"FFmpeg failed to extract 60s preview clip: {res.stderr[-300:] if res.stderr else 'unknown error'}")
+
+    log("PREVIEW", f"✅ 60s raw clip extracted ({os.path.getsize(preview_raw_clip) / (1024*1024):.2f} MB)")
+
+    # Slice subtitles for the 60s preview window
+    has_subs = False
+    if srt_path and os.path.exists(srt_path):
+        clean_text = read_subtitle_file_robustly(srt_path)
+        clean_text = sanitize_subtitle_text(fix_arabic_mojibake(clean_text))
+        temp_clean = os.path.join(preview_dir, "temp_sub.srt")
+        with open(temp_clean, "w", encoding="utf-8", newline="\n") as tf:
+            tf.write(clean_text)
+        sanitize_srt_file(temp_clean, temp_clean, offset_seconds=sub_offset_seconds)
+        with open(temp_clean, "r", encoding="utf-8") as tf:
+            full_clean = tf.read()
+        try: os.remove(temp_clean)
+        except Exception: pass
+
+        sliced_srt = slice_srt_content_for_preview(full_clean, preview_start_sec, 60.0)
+        if sliced_srt.strip():
+            with open(preview_sliced_srt, "w", encoding="utf-8", newline="\n") as sf:
+                sf.write(sliced_srt)
+            has_subs = True
+            log("PREVIEW", "✅ Sliced Arabic subtitles for 60s preview window.")
+        else:
+            log("PREVIEW", "⚠️ No subtitle dialogue entries fell within this 60s window.")
+
+    # Burn subtitles into preview sample in ~10 seconds
+    log("PREVIEW", "🔥 Burning subtitles into 60s preview sample...")
+    fonts_dir_opt = ":fontsdir='/content/fonts'" if os.path.exists("/content/fonts") else ""
+    sub_style = "FontName=Noto Sans Arabic,FontSize=29,Bold=0,Outline=0.8,Shadow=0.4,MarginV=10,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Alignment=2"
+
+    burn_cmd = [ffmpeg_bin, "-y", "-nostdin", "-i", preview_raw_clip]
+    if has_subs and os.path.exists(preview_sliced_srt):
+        escaped_srt = preview_sliced_srt.replace('\\', '/').replace(':', '\\:')
+        sub_filter = f"subtitles='{escaped_srt}'{fonts_dir_opt}:force_style='{sub_style}'"
+        burn_cmd.extend(["-vf", sub_filter])
+    burn_cmd.extend([
+        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "22",
+        "-c:a", "copy",
+        output_path
+    ])
+
+    burn_res = subprocess.run(burn_cmd, capture_output=True, text=True, timeout=90)
+    if burn_res.returncode != 0 or not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
+        raise RuntimeError(f"FFmpeg failed to burn subtitles into preview: {burn_res.stderr[-300:] if burn_res.stderr else 'unknown error'}")
+
+    sample_size_mb = os.path.getsize(output_path) / (1024 * 1024)
+    log("PREVIEW", f"🎉 Preview sample generated successfully: {output_path} ({sample_size_mb:.2f} MB)")
+    return output_path
+
 # =============================================================================
 # 5. STREAMING HOST UPLOAD (DOODSTREAM API) WITH RESILIENCE & RETRIES
 # =============================================================================
@@ -2319,7 +2647,7 @@ def upload_to_vidmoly(video_path: str, api_key: str = VIDMOLY_API_KEY, max_retri
                         upload_url,
                         data=monitor,
                         headers={'Content-Type': monitor.content_type, 'User-Agent': HEADERS["User-Agent"]},
-                        timeout=7200
+                        timeout=600
                     )
             else:
                 with open(video_path, 'rb') as f:
@@ -2332,7 +2660,7 @@ def upload_to_vidmoly(video_path: str, api_key: str = VIDMOLY_API_KEY, max_retri
                             'api_key': api_key
                         },
                         headers={'User-Agent': HEADERS["User-Agent"]},
-                        timeout=7200
+                        timeout=600
                     )
 
             resp_text = resp.text
@@ -3150,17 +3478,28 @@ create_wordpress_post = publish_movie_to_pantheon
 # =============================================================================
 # MASTER PIPELINE ORCHESTRATOR
 # =============================================================================
-def run_pipeline(movie_title: str, release_year: str = None, imdb_id: str = None, preferred_quality: str = "both"):
+def run_pipeline(
+    movie_title: str,
+    release_year: str = None,
+    imdb_id: str = None,
+    preferred_quality: str = "both",
+    preview_mode: bool = False,
+    preview_start_time: str = "00:02:30",
+    sub_offset_seconds: float = 0.0
+):
     """
     End-to-End Execution for Movies and TV Series Episodes:
     Detects Movie vs Episode -> TMDB / TV Metadata -> YTS (Movie) or EZTV (TV) Torrent
     -> aria2c (.mp4) -> Arabic .srt Download (OpenSubtitles v3 / Stremio)
+    -> [PREVIEW MODE: 60s sample burn & inline player]
     -> FFmpeg 1080p Hardsubbing -> Subbed 720p Downscaling
     -> Multi-Server Upload (1080p to Doodstream, 720p to Streamtape)
     -> Pantheon Headless WP with doodstream_url & streamtape_url -> Immediate Cleanup
     """
     print("=" * 75)
     print("  EGYMAX CLOUD AUTOMATION PIPELINE (OPTIMIZED DUAL-QUALITY ENGINE)")
+    if preview_mode:
+        print(f"  ⚡ FAST 60S PREVIEW MODE ACTIVE (Start: {preview_start_time}, Offset: {sub_offset_seconds}s)")
     print("=" * 75)
     detect_hardware_acceleration()
 
@@ -3220,8 +3559,44 @@ def run_pipeline(movie_title: str, release_year: str = None, imdb_id: str = None
                 release_type=source_title_info
             )
 
+            # Fast 60-Second Preview Mode Intercept
+            if preview_mode:
+                log("PREVIEW", f"⚡ PREVIEW_MODE is ON: Generating 60s sample at {preview_start_time} (offset={sub_offset_seconds}s)...")
+                preview_sample_path = generate_60s_preview_sample(
+                    raw_video_path,
+                    arabic_srt_path,
+                    preview_start_time=preview_start_time,
+                    sub_offset_seconds=sub_offset_seconds
+                )
+                try:
+                    import IPython.display as ipydisplay
+                    import base64
+                    with open(preview_sample_path, "rb") as vf:
+                        video_b64 = base64.b64encode(vf.read()).decode("ascii")
+                    html_code = f"""
+                    <div style="margin: 20px 0; padding: 15px; background: #1a1a2e; border: 2px solid #e50914; border-radius: 10px; max-width: 760px;">
+                        <h3 style="color: #fff; margin-top: 0; font-family: sans-serif;">🎬 60s Preview Sample ({preview_start_time} - {parsed['show_name']} {parsed['episode_tag']})</h3>
+                        <p style="color: #bbb; font-size: 13px; font-family: sans-serif;">Verify subtitle sync, font rendering, and Arabic glyph shaping below before full render.</p>
+                        <video width="720" height="405" controls autoplay style="border-radius: 8px; width: 100%; max-width: 720px;">
+                            <source src="data:video/mp4;base64,{video_b64}" type="video/mp4">
+                            Your browser does not support HTML5 video.
+                        </video>
+                    </div>
+                    """
+                    ipydisplay.display(ipydisplay.HTML(html_code))
+                except Exception as e:
+                    log("PREVIEW", f"Inline player notice: {e}")
+
+                print("\n" + "=" * 75)
+                print("  ⚡ 60-SECOND PREVIEW MODE COMPLETED!")
+                print(f"  Sample File: {preview_sample_path}")
+                print("  Multi-server uploading & publishing SKIPPED as requested.")
+                print("  Review the sample above. Set PREVIEW_MODE = False when ready to produce!")
+                print("=" * 75)
+                return {"preview_mode": True, "preview_sample": preview_sample_path, "title": f"{parsed['show_name']} {parsed['episode_tag']}"}
+
             # 5. Burn Arabic Subtitles directly into 1080p video frames once
-            burned_1080p_path = burn_arabic_subtitles(raw_video_path, arabic_srt_path)
+            burned_1080p_path = burn_arabic_subtitles(raw_video_path, arabic_srt_path, sub_offset_seconds=sub_offset_seconds)
 
             # Subtitle status evaluation
             if not arabic_srt_path:
@@ -3401,8 +3776,45 @@ def run_pipeline(movie_title: str, release_year: str = None, imdb_id: str = None
                 release_type=source_title_info
             )
 
+            # Fast 60-Second Preview Mode Intercept
+            if preview_mode:
+                log("PREVIEW", f"⚡ PREVIEW_MODE is ON: Generating 60s sample at {preview_start_time} (offset={sub_offset_seconds}s)...")
+                preview_sample_path = generate_60s_preview_sample(
+                    raw_video_path,
+                    arabic_srt_path,
+                    preview_start_time=preview_start_time,
+                    sub_offset_seconds=sub_offset_seconds
+                )
+                try:
+                    import IPython.display as ipydisplay
+                    import base64
+                    with open(preview_sample_path, "rb") as vf:
+                        video_b64 = base64.b64encode(vf.read()).decode("ascii")
+                    movie_display_name = meta.get("title") or movie_title
+                    html_code = f"""
+                    <div style="margin: 20px 0; padding: 15px; background: #1a1a2e; border: 2px solid #e50914; border-radius: 10px; max-width: 760px;">
+                        <h3 style="color: #fff; margin-top: 0; font-family: sans-serif;">🎬 60s Preview Sample ({preview_start_time} - {movie_display_name})</h3>
+                        <p style="color: #bbb; font-size: 13px; font-family: sans-serif;">Verify subtitle sync, font rendering, and Arabic glyph shaping below before full render.</p>
+                        <video width="720" height="405" controls autoplay style="border-radius: 8px; width: 100%; max-width: 720px;">
+                            <source src="data:video/mp4;base64,{video_b64}" type="video/mp4">
+                            Your browser does not support HTML5 video.
+                        </video>
+                    </div>
+                    """
+                    ipydisplay.display(ipydisplay.HTML(html_code))
+                except Exception as e:
+                    log("PREVIEW", f"Inline player notice: {e}")
+
+                print("\n" + "=" * 75)
+                print("  ⚡ 60-SECOND PREVIEW MODE COMPLETED!")
+                print(f"  Sample File: {preview_sample_path}")
+                print("  Multi-server uploading & publishing SKIPPED as requested.")
+                print("  Review the sample above. Set PREVIEW_MODE = False when ready to produce!")
+                print("=" * 75)
+                return {"preview_mode": True, "preview_sample": preview_sample_path, "title": meta.get("title") or movie_title}
+
             # 5. Burn Arabic Subtitles directly into 1080p video frames once
-            burned_1080p_path = burn_arabic_subtitles(raw_video_path, arabic_srt_path)
+            burned_1080p_path = burn_arabic_subtitles(raw_video_path, arabic_srt_path, sub_offset_seconds=sub_offset_seconds)
 
             # Accurate subtitle status evaluation
             if not arabic_srt_path:

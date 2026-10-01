@@ -2,7 +2,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import Image from 'next/image';
 import CinemaPlayer from './CinemaPlayer';
-import { normalizeStreamHgUrl } from '../lib/api';
+import { normalizeStreamHgUrl, normalizeVidmolyUrl, getVidmolyMirrorUrl } from '../lib/api';
 import styles from './VideoPlayer.module.css';
 
 // Provider label mapping for clean Arabic display
@@ -64,7 +64,10 @@ export default function VideoPlayer({
       list = servers
         .filter((s) => s && s.url && typeof s.url === 'string')
         .map((s, idx) => {
-          const normUrl = normalizeStreamHgUrl(s.url);
+          let normUrl = normalizeStreamHgUrl(s.url);
+          if (s.id === 'vidmoly' || (s.name && s.name.toLowerCase().includes('vidmoly')) || normUrl.includes('vidmoly')) {
+            normUrl = normalizeVidmolyUrl(normUrl);
+          }
           return {
             id: s.id || `server-${idx + 1}`,
             name: s.name || `Server ${idx + 1}`,
@@ -91,7 +94,7 @@ export default function VideoPlayer({
           id: 'vidmoly',
           name: 'Vidmoly (1080p)',
           label: PROVIDER_LABELS.vidmoly,
-          url: vUrl,
+          url: normalizeVidmolyUrl(vUrl),
           fast: true,
         });
       }
@@ -161,6 +164,9 @@ export default function VideoPlayer({
   // Active Server ID: default to first available server in priority order
   const [activeServerId, setActiveServerId] = useState(() => resolvedServers[0]?.id || 'default');
 
+  // Mirror fallback state for Vidmoly (toggles between vidmoly.me and vidmoly.to)
+  const [useVidmolyMirror, setUseVidmolyMirror] = useState(false);
+
   // Synchronize active server if servers list changes (e.g. episode switch)
   useEffect(() => {
     if (resolvedServers.length > 0 && !resolvedServers.some((s) => s.id === activeServerId) && activeServerId !== 'vip') {
@@ -168,9 +174,11 @@ export default function VideoPlayer({
     }
   }, [resolvedServers, activeServerId]);
 
-  // Active Server details
+  // Active Server details & mirror fallback URL resolution
   const activeServer = resolvedServers.find((s) => s.id === activeServerId) || resolvedServers[0];
-  const activeUrl = activeServer?.url || null;
+  const rawActiveUrl = activeServer?.url || null;
+  const isVidmoly = activeServer?.id === 'vidmoly' || (rawActiveUrl && rawActiveUrl.includes('vidmoly'));
+  const activeUrl = isVidmoly && useVidmolyMirror ? getVidmolyMirrorUrl(rawActiveUrl) : rawActiveUrl;
 
   // Resolve direct stream link for optional EGYMAX VIP player
   const resolveStream = useCallback(async () => {
@@ -296,6 +304,19 @@ export default function VideoPlayer({
                 {isResolving && <span className={styles.tabLoading}>⏳</span>}
               </button>
             )}
+
+            {/* Vidmoly Mirror Domain Switcher (vidmoly.me <-> vidmoly.to) */}
+            {isVidmoly && (
+              <button
+                type="button"
+                onClick={() => setUseVidmolyMirror((prev) => !prev)}
+                className={`${styles.serverTab} ${useVidmolyMirror ? styles.activeTab : ''}`}
+                style={{ borderColor: 'rgba(56, 189, 248, 0.4)', color: '#38bdf8' }}
+                title="التبديل بين نطاق vidmoly.me ونطاق vidmoly.to الاحتياطي في حال حجب أحدهما"
+              >
+                <span>🔄 مرآة بديلة: {useVidmolyMirror ? 'vidmoly.to' : 'vidmoly.me'}</span>
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -343,7 +364,8 @@ export default function VideoPlayer({
               height="100%" 
               frameBorder="0" 
               allowFullScreen 
-              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
+              referrerPolicy="no-referrer"
+              allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
               scrolling="no"
             />
           </div>

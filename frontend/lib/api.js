@@ -119,6 +119,45 @@ export function normalizeStreamHgUrl(url) {
 }
 
 /**
+ * Normalizes any Vidmoly embed URL to valid embed format: https://vidmoly.me/embed-{code}.html
+ * and supports mirror domain vidmoly.to.
+ * Handles:
+ * - vidmoly.me/embed-{code}.html
+ * - vidmoly.me/{code}.html
+ * - vidmoly.me/{code}
+ * - vidmoly.to/embed-{code}.html
+ * - vidmoly.to/{code}.html
+ * - vidmoly.to/{code}
+ */
+export function normalizeVidmolyUrl(url, preferredMirror = null) {
+  if (!url || typeof url !== 'string') return url;
+  const match = url.match(/(?:https?:\/\/)?(?:[a-zA-Z0-9.-]+\.)?(vidmoly\.(?:me|to|net|org))\/(?:embed-)?([a-zA-Z0-9]+)(?:\.html)?/i);
+  if (match && match[2]) {
+    const origDomain = match[1].toLowerCase();
+    const code = match[2];
+    if (!['api', 'upload', 'dl', 'contact', 'faq'].includes(code.toLowerCase())) {
+      const domain = preferredMirror || (origDomain.includes('vidmoly.to') ? 'vidmoly.to' : 'vidmoly.me');
+      return `https://${domain}/embed-${code}.html`;
+    }
+  }
+  return url;
+}
+
+/**
+ * Switch Vidmoly URL between primary domain (vidmoly.me) and mirror domain (vidmoly.to)
+ */
+export function getVidmolyMirrorUrl(url) {
+  if (!url || typeof url !== 'string') return url;
+  const normalized = normalizeVidmolyUrl(url);
+  if (normalized.includes('vidmoly.me')) {
+    return normalized.replace('vidmoly.me', 'vidmoly.to');
+  } else if (normalized.includes('vidmoly.to')) {
+    return normalized.replace('vidmoly.to', 'vidmoly.me');
+  }
+  return normalized;
+}
+
+/**
  * Extract featured image URL from an embedded WP post object or fallback
  */
 export function getFeaturedImage(post) {
@@ -330,8 +369,8 @@ export function parseMovieData(post) {
     }
   }
 
-  // Enforce HTTPS and normalize StreamHG / hgcloud domains to https://hgcloud.to/e/{code}
-  vidmolyUrl = enforceHttps(vidmolyUrl);
+  // Enforce HTTPS and normalize domains (StreamHG -> hgcloud.to/e/{code}, Vidmoly -> vidmoly.me/embed-{code}.html)
+  vidmolyUrl = normalizeVidmolyUrl(enforceHttps(vidmolyUrl));
   streamhgUrl = normalizeStreamHgUrl(enforceHttps(streamhgUrl));
   streamtapeUrl = enforceHttps(streamtapeUrl);
   doodstreamUrl = enforceHttps(doodstreamUrl);
@@ -346,10 +385,12 @@ export function parseMovieData(post) {
     { id: 'streamhg', name: 'StreamHG (720p)', label: '⚡ سيرفر 2 (StreamHG 720p)', url: streamhgUrl, fast: true },
     { id: 'streamtape', name: 'Streamtape', label: '🌐 سيرفر 3 (Streamtape)', url: streamtapeUrl, fast: false },
     { id: 'doodstream', name: 'Doodstream', label: '🎬 سيرفر 4 (Doodstream)', url: doodstreamUrl, fast: false },
-  ].filter(s => !!s.url).map(s => ({
-    ...s,
-    url: normalizeStreamHgUrl(s.url)
-  }));
+  ].filter(s => !!s.url).map(s => {
+    let u = s.url;
+    if (s.id === 'vidmoly' || u.includes('vidmoly')) u = normalizeVidmolyUrl(u);
+    if (s.id === 'streamhg' || u.includes('streamhg') || u.includes('hgcloud')) u = normalizeStreamHgUrl(u);
+    return { ...s, url: u };
+  });
 
   // Fallback for older posts that have a single generic embed
   if (servers.length === 0 && primaryEmbed) {
