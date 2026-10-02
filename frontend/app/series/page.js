@@ -85,36 +85,40 @@ export default async function SeriesCatalogPage({ searchParams }) {
         </section>
 
         {/* Filter Bar & Genre Pills */}
-        <div className={styles.filterBar}>
-          <div className={styles.genrePills}>
-            {GENRES.map((genre) => {
-              const isActive = (!selectedCategory && genre === 'الكل') || selectedCategory === genre;
-              const href = genre === 'الكل' ? '/series' : `/series?category=${encodeURIComponent(genre)}`;
-              return (
-                <Link
-                  key={genre}
-                  href={href}
-                  className={`${styles.genrePill} ${isActive ? styles.activeGenrePill : ''}`}
-                >
-                  {genre}
-                </Link>
-              );
-            })}
+        {series.length > 0 && (
+          <div className={styles.filterBar}>
+            <div className={styles.genrePills}>
+              {GENRES.map((genre) => {
+                const isActive = (!selectedCategory && genre === 'الكل') || selectedCategory === genre;
+                const href = genre === 'الكل' ? '/series' : `/series?category=${encodeURIComponent(genre)}`;
+                return (
+                  <Link
+                    key={genre}
+                    href={href}
+                    className={`${styles.genrePill} ${isActive ? styles.activeGenrePill : ''}`}
+                  >
+                    {genre}
+                  </Link>
+                );
+              })}
+            </div>
+
+            <span className={styles.seriesCount}>
+              {series.length} مسلسل متوفر
+            </span>
           </div>
+        )}
 
-          <span className={styles.seriesCount}>
-            {series.length} مسلسل متوفر
-          </span>
-        </div>
-
-        {/* Series Grid */}
+        {/* Series Grid or Clean Dark-Themed Empty State */}
         {series.length === 0 ? (
           <div className={styles.emptyState}>
-            <div className={styles.emptyIcon}>🔍</div>
-            <h2>لا توجد مسلسلات مطابقة</h2>
-            <p>جرّب اختيار تصنيف آخر أو تصفح القائمة الكاملة.</p>
-            <Link href="/series" className={styles.genrePill} style={{ marginTop: '1rem' }}>
-              عرض جميع المسلسلات
+            <div className={styles.emptyIcon}>📺</div>
+            <h2 className={styles.emptyHeading}>قسم المسلسلات قيد التجهيز</h2>
+            <p className={styles.emptySubtitle}>
+              سيتم إضافة المواسم والحلقات قريباً بأعلى جودة وسيرفرات تشغيل فائقة السرعة. ترقبونا!
+            </p>
+            <Link href="/movies" className={styles.browseMoviesBtn}>
+              🎬 تصفح أحدث الأفلام المتاحة الآن
             </Link>
           </div>
         ) : (

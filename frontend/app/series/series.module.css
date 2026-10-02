@@ -248,7 +248,8 @@
 }
 
 .emptyState {
-  background: var(--bg-surface);
+  background: rgba(15, 23, 42, 0.6);
+  backdrop-filter: blur(12px);
   border: 1px dashed var(--glass-border);
   border-radius: var(--radius-lg);
   padding: 5rem 2rem;
@@ -256,11 +257,50 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 1rem;
+  gap: 1.25rem;
+  box-shadow: 0 15px 35px rgba(0, 0, 0, 0.5);
 }
 
 .emptyIcon {
-  font-size: 3rem;
+  font-size: 3.5rem;
+  filter: drop-shadow(0 0 20px rgba(56, 189, 248, 0.3));
+}
+
+.emptyHeading {
+  font-size: 1.8rem;
+  font-weight: 800;
+  color: #ffffff;
+  margin: 0;
+  letter-spacing: -0.5px;
+}
+
+.emptySubtitle {
+  font-size: 1.05rem;
+  color: #94a3b8;
+  max-width: 520px;
+  line-height: 1.7;
+  margin: 0;
+}
+
+.browseMoviesBtn {
+  margin-top: 0.5rem;
+  background: var(--accent-red-gradient);
+  color: #ffffff;
+  font-size: 0.95rem;
+  font-weight: 800;
+  padding: 10px 24px;
+  border-radius: var(--radius-md);
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  box-shadow: 0 4px 15px var(--accent-red-glow);
+  transition: all 0.2s ease;
+}
+
+.browseMoviesBtn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 25px rgba(229, 9, 20, 0.5);
 }
 
 @media (max-width: 1200px) {

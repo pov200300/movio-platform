@@ -777,308 +777,7 @@ export function parseMovieData(post) {
 // TV SERIES DATA & API ENGINE
 // =============================================================================
 
-export const CURATED_SERIES = [
-  {
-    id: 'series-breaking-bad',
-    slug: 'breaking-bad',
-    title: 'Breaking Bad',
-    titleAr: 'اختلال ضال',
-    year: '2008 - 2013',
-    rating: '9.5',
-    status: 'مكتمل',
-    quality: '1080p Full HD',
-    genres: ['جريمة', 'دراما', 'إثارة'],
-    seasonsCount: 5,
-    episodesCount: 62,
-    posterUrl: 'https://image.tmdb.org/t/p/w500/ggFHVNu6YYI5L9pCfOacjizRGt.jpg',
-    backdropUrl: 'https://image.tmdb.org/t/p/original/tsRy63Mu5cu8etL1X7ZLyf7UP1M.jpg',
-    synopsis: 'مدرس كيمياء في المدرسة الثانوية يُشخص بسرطان الرئة في مرحلة متقدمة، فيتحول إلى تصنيع وبيع الميثامفيتامين لتأمين مستقبل عائلته المالي.',
-    cast: ['Bryan Cranston', 'Aaron Paul', 'Anna Gunn', 'Dean Norris'],
-    seasons: [
-      {
-        seasonNumber: 1,
-        title: 'الموسم الأول',
-        episodes: [
-          {
-            episodeNumber: 1,
-            title: 'الحلقة 1 - البداية',
-            duration: '58 دقيقة',
-            doodEmbed: 'https://doodstream.com/e/bb_s01e01',
-            streamtapeEmbed: 'https://streamtape.com/e/bb_s01e01',
-            embedUrl: 'https://doodstream.com/e/bb_s01e01',
-            synopsis: 'والتر وايت مدرس كيمياء يكتشف إصابته بالسرطان ويتعاون مع طالبه السابق جيسي بينكمان.'
-          },
-          {
-            episodeNumber: 2,
-            title: 'الحلقة 2 - القطة في الحقيبة',
-            duration: '48 دقيقة',
-            doodEmbed: 'https://doodstream.com/e/bb_s01e02',
-            streamtapeEmbed: 'https://streamtape.com/e/bb_s01e02',
-            embedUrl: 'https://doodstream.com/e/bb_s01e02',
-            synopsis: 'يحاول والتر وجيسي التخلص من جثتين بعد مواجهتهما الأولى الكارثية.'
-          },
-          {
-            episodeNumber: 3,
-            title: 'الحلقة 3 - ونفاد الحيلة',
-            duration: '48 دقيقة',
-            doodEmbed: 'https://doodstream.com/e/bb_s01e03',
-            streamtapeEmbed: 'https://streamtape.com/e/bb_s01e03',
-            embedUrl: 'https://doodstream.com/e/bb_s01e03',
-            synopsis: 'والتر يواجه قراراً مصيرياً وأخلاقياً بشأن مصير كريزي-8 المحتجز في القبو.'
-          },
-          {
-            episodeNumber: 4,
-            title: 'الحلقة 4 - علاج السرطان',
-            duration: '47 دقيقة',
-            doodEmbed: 'https://doodstream.com/e/bb_s01e04',
-            streamtapeEmbed: 'https://streamtape.com/e/bb_s01e04',
-            embedUrl: 'https://doodstream.com/e/bb_s01e04',
-            synopsis: 'عائلة والتر تضغط عليه لقبول التمويل لعلاجه الكيميائي، بينما يعود جيسي لمنزل عائلته.'
-          }
-        ]
-      },
-      {
-        seasonNumber: 2,
-        title: 'الموسم الثاني',
-        episodes: [
-          {
-            episodeNumber: 1,
-            title: 'الحلقة 1 - السبعة وسبعة وثلاثون',
-            duration: '47 دقيقة',
-            doodEmbed: 'https://doodstream.com/e/bb_s02e01',
-            streamtapeEmbed: 'https://streamtape.com/e/bb_s02e01',
-            embedUrl: 'https://doodstream.com/e/bb_s02e01',
-            synopsis: 'والتر وجيسي يدركان مدى خطورة توكو سالامانكا ويخططان للتخلص منه.'
-          },
-          {
-            episodeNumber: 2,
-            title: 'الحلقة 2 - مشوي',
-            duration: '48 دقيقة',
-            doodEmbed: 'https://doodstream.com/e/bb_s02e02',
-            streamtapeEmbed: 'https://streamtape.com/e/bb_s02e02',
-            embedUrl: 'https://doodstream.com/e/bb_s02e02',
-            synopsis: 'توكو يختطف والتر وجيسي ويأخذهما إلى مخبأ في الصحراء حيث يلتقيان بعمه هيكتور.'
-          }
-        ]
-      }
-    ]
-  },
-  {
-    id: 'series-game-of-thrones',
-    slug: 'game-of-thrones',
-    title: 'Game of Thrones',
-    titleAr: 'صراع العروش',
-    year: '2011 - 2019',
-    rating: '9.2',
-    status: 'مكتمل',
-    quality: '1080p Full HD',
-    genres: ['فانتازيا', 'دراما', 'مغامرة'],
-    seasonsCount: 8,
-    episodesCount: 73,
-    posterUrl: 'https://image.tmdb.org/t/p/w500/1XS1oqL89opfnbLl8WnZY1O1uJx.jpg',
-    backdropUrl: 'https://image.tmdb.org/t/p/original/2OMB0ynKlyIenMJWI2Dy9IWT4c.jpg',
-    synopsis: 'تسع عائلات نبيلة تتقاتل من أجل السيطرة على أراضي ويستروس، بينما يستيقظ عدو قديم بعد أن ظل خامداً لآلاف السنين.',
-    cast: ['Emilia Clarke', 'Kit Harington', 'Peter Dinklage', 'Lena Headey'],
-    seasons: [
-      {
-        seasonNumber: 1,
-        title: 'الموسم الأول',
-        episodes: [
-          {
-            episodeNumber: 1,
-            title: 'الحلقة 1 - الشتاء قادم',
-            duration: '62 دقيقة',
-            doodEmbed: 'https://doodstream.com/e/got_s01e01',
-            streamtapeEmbed: 'https://streamtape.com/e/got_s01e01',
-            embedUrl: 'https://doodstream.com/e/got_s01e01',
-            synopsis: 'الملك روبرت براثيون يزور وينترفيل ليطلب من إيدارد ستارك أن يصبح يد الملك الجديد.'
-          },
-          {
-            episodeNumber: 2,
-            title: 'الحلقة 2 - طريق الملك',
-            duration: '56 دقيقة',
-            doodEmbed: 'https://doodstream.com/e/got_s01e02',
-            streamtapeEmbed: 'https://streamtape.com/e/got_s01e02',
-            embedUrl: 'https://doodstream.com/e/got_s01e02',
-            synopsis: 'ند ستارك وبناته يتجهون جنوباً نحو كينغز لاندينغ، بينما ينضم جون سنو إلى حرس الليل.'
-          },
-          {
-            episodeNumber: 3,
-            title: 'الحلقة 3 - اللورد سنو',
-            duration: '57 دقيقة',
-            doodEmbed: 'https://doodstream.com/e/got_s01e03',
-            streamtapeEmbed: 'https://streamtape.com/e/got_s01e03',
-            embedUrl: 'https://doodstream.com/e/got_s01e03',
-            synopsis: 'ند يصل إلى كينغز لاندينغ ويصدم بالديون والفساد في البلاط الملكي.'
-          }
-        ]
-      }
-    ]
-  },
-  {
-    id: 'series-house-of-the-dragon',
-    slug: 'house-of-the-dragon',
-    title: 'House of the Dragon',
-    titleAr: 'آل التنين',
-    year: '2022 - الآن',
-    rating: '8.5',
-    status: 'مستمر',
-    quality: '1080p Full HD',
-    genres: ['فانتازيا', 'دراما', 'أكشن'],
-    seasonsCount: 2,
-    episodesCount: 18,
-    posterUrl: 'https://image.tmdb.org/t/p/w500/t9Xke5724fqW3429IOP0q994NcK.jpg',
-    backdropUrl: 'https://image.tmdb.org/t/p/original/etj8E2o0Bud0HkONVQPjyCkIvpv.jpg',
-    synopsis: 'قبل 200 عام من أحداث صراع العروش، تبدأ حرب أهلية مدمرة داخل آل تارغاريان تُعرف باسم رقصة التنانين للسيطرة على العرش الحديدي.',
-    cast: ['Matt Smith', 'Emma D\'Arcy', 'Olivia Cooke', 'Rhys Ifans'],
-    seasons: [
-      {
-        seasonNumber: 1,
-        title: 'الموسم الأول',
-        episodes: [
-          {
-            episodeNumber: 1,
-            title: 'الحلقة 1 - ورثة التنين',
-            duration: '66 دقيقة',
-            doodEmbed: 'https://doodstream.com/e/hotd_s01e01',
-            streamtapeEmbed: 'https://streamtape.com/e/hotd_s01e01',
-            embedUrl: 'https://doodstream.com/e/hotd_s01e01',
-            synopsis: 'الملك فيسيريس ينظم بطولة للاحتفال بولادة طفله المنتظر، بينما يختار خليفته على العرش.'
-          },
-          {
-            episodeNumber: 2,
-            title: 'الحلقة 2 - الأمير المارق',
-            duration: '54 دقيقة',
-            doodEmbed: 'https://doodstream.com/e/hotd_s01e02',
-            streamtapeEmbed: 'https://streamtape.com/e/hotd_s01e02',
-            embedUrl: 'https://doodstream.com/e/hotd_s01e02',
-            synopsis: 'الأميرة رينيرا تتحدى رغبة والدها في اختيار زوج جديد وتواجه عمها ديمون في دراغونستون.'
-          }
-        ]
-      }
-    ]
-  },
-  {
-    id: 'series-stranger-things',
-    slug: 'stranger-things',
-    title: 'Stranger Things',
-    titleAr: 'أشياء غريبة',
-    year: '2016 - 2025',
-    rating: '8.7',
-    status: 'مستمر',
-    quality: '1080p Full HD',
-    genres: ['خيال علمي', 'رعب', 'غموض'],
-    seasonsCount: 4,
-    episodesCount: 34,
-    posterUrl: 'https://image.tmdb.org/t/p/w500/49WJfeN0moxb9IPfGn8AIqMGskD.jpg',
-    backdropUrl: 'https://image.tmdb.org/t/p/original/56v2KjBlU4XaOv9rVYEQypROD7P.jpg',
-    synopsis: 'في بلدة هوكينز بولاية إنديانا، يختفي صبي صغير في ظروف غامضة، فتكشف التحقيقات عن تجارب سرية وقوى خارقة وفتاة غريبة الأطوار.',
-    cast: ['Millie Bobby Brown', 'Finn Wolfhard', 'Winona Ryder', 'David Harbour'],
-    seasons: [
-      {
-        seasonNumber: 1,
-        title: 'الموسم الأول',
-        episodes: [
-          {
-            episodeNumber: 1,
-            title: 'الحلقة 1 - اختفاء ويل بايرز',
-            duration: '48 دقيقة',
-            doodEmbed: 'https://doodstream.com/e/st_s01e01',
-            streamtapeEmbed: 'https://streamtape.com/e/st_s01e01',
-            embedUrl: 'https://doodstream.com/e/st_s01e01',
-            synopsis: 'في طريق عودته إلى المنزل، يواجه ويل شيئاً مرعباً في الظلام ويختفي بلا أثر.'
-          },
-          {
-            episodeNumber: 2,
-            title: 'الحلقة 2 - الفتاة الغريبة في مابل ستريت',
-            duration: '55 دقيقة',
-            doodEmbed: 'https://doodstream.com/e/st_s01e02',
-            streamtapeEmbed: 'https://streamtape.com/e/st_s01e02',
-            embedUrl: 'https://doodstream.com/e/st_s01e02',
-            synopsis: 'يعثر الأصدقاء على فتاة حليقة الرأس في الغابة، بينما تبحث جويس عن ابنها بيأس.'
-          }
-        ]
-      }
-    ]
-  },
-  {
-    id: 'series-chernobyl',
-    slug: 'chernobyl',
-    title: 'Chernobyl',
-    titleAr: 'تشرنوبل',
-    year: '2019',
-    rating: '9.4',
-    status: 'مكتمل',
-    quality: '1080p Full HD',
-    genres: ['دراما', 'تاريخي', 'إثارة'],
-    seasonsCount: 1,
-    episodesCount: 5,
-    posterUrl: 'https://image.tmdb.org/t/p/w500/hlLXt2tOPT6RRnjiUmoxyG1LTFi.jpg',
-    backdropUrl: 'https://image.tmdb.org/t/p/original/uL6AdB5CqR66h3c2d4wZl2Q9fTz.jpg',
-    synopsis: 'في أبريل 1986، وقع انفجار هائل في محطة تشرنوبل للطاقة النووية في الاتحاد السوفيتي، مما أدى إلى واحدة من أسوأ الكوارث التي صنعها الإنسان.',
-    cast: ['Jared Harris', 'Stellan Skarsgård', 'Emily Watson'],
-    seasons: [
-      {
-        seasonNumber: 1,
-        title: 'الموسم الأول (مسلسل قصير)',
-        episodes: [
-          {
-            episodeNumber: 1,
-            title: 'الحلقة 1 - 1:23:45',
-            duration: '59 دقيقة',
-            doodEmbed: 'https://doodstream.com/e/chernobyl_e01',
-            streamtapeEmbed: 'https://streamtape.com/e/chernobyl_e01',
-            embedUrl: 'https://doodstream.com/e/chernobyl_e01',
-            synopsis: 'ينفجر المفاعل رقم 4 في محطة تشرنوبل للطاقة النووية، ويحاول العمال احتواء الحريق غير مدركين لحجم الكارثة الإشعاعية.'
-          },
-          {
-            episodeNumber: 2,
-            title: 'الحلقة 2 - الرجاء الهدوء',
-            duration: '65 دقيقة',
-            doodEmbed: 'https://doodstream.com/e/chernobyl_e02',
-            streamtapeEmbed: 'https://streamtape.com/e/chernobyl_e02',
-            embedUrl: 'https://doodstream.com/e/chernobyl_e02',
-            synopsis: 'فاليري ليجاسوف ويولانا خوميوك يحذران الحكومة السوفيتية من عواقب الانفجار الثاني المحتمل.'
-          }
-        ]
-      }
-    ]
-  },
-  {
-    id: 'series-loki',
-    slug: 'loki',
-    title: 'Loki',
-    titleAr: 'لوكي',
-    year: '2021 - 2023',
-    rating: '8.2',
-    status: 'مكتمل',
-    quality: '1080p Full HD',
-    genres: ['أكشن', 'مغامرة', 'خيال علمي'],
-    seasonsCount: 2,
-    episodesCount: 12,
-    posterUrl: 'https://image.tmdb.org/t/p/w500/voHUmlvjysvgFdnFiFrnfF31Drq.jpg',
-    backdropUrl: 'https://image.tmdb.org/t/p/original/bZGAX8oMDm3Mo5i0ZPKh9G2hcaO.jpg',
-    synopsis: 'بعد سرقة التيسراكت، يتم القبض على لوكي من قبل منظمة تباين الوقت الغامضة ويُجبر على إصلاح الخطوط الزمنية المتفرعة.',
-    cast: ['Tom Hiddleston', 'Owen Wilson', 'Sophia Di Martino', 'Ke Huy Quan'],
-    seasons: [
-      {
-        seasonNumber: 1,
-        title: 'الموسم الأول',
-        episodes: [
-          {
-            episodeNumber: 1,
-            title: 'الحلقة 1 - الهدف المجيد',
-            duration: '51 دقيقة',
-            doodEmbed: 'https://doodstream.com/e/loki_s01e01',
-            streamtapeEmbed: 'https://streamtape.com/e/loki_s01e01',
-            embedUrl: 'https://doodstream.com/e/loki_s01e01',
-            synopsis: 'لوكي يجد نفسه أمام محكمة منظمة تباين الوقت (TVA) ويكتشف حقيقة القوى الكونية التي تحكم الزمن.'
-          }
-        ]
-      }
-    ]
-  }
-];
+export const CURATED_SERIES = [];
 
 /**
  * Groups WordPress posts (episodes / series posts) into unified TV Show entities.
@@ -1246,11 +945,12 @@ export function groupPostsIntoSeries(posts) {
 /**
  * Fetch series list with optional search and category filters.
  * Returns unique TV Show entities (never individual episodes).
+ * Returns empty array [] if no real series are fetched from WP.
  */
 export async function getSeriesList({ search = '', category = null } = {}) {
-  let list = [...CURATED_SERIES];
+  let list = [];
 
-  // Also query WordPress for any posts related to series/episodes
+  // Query WordPress for any posts related to series/episodes
   try {
     const wpPosts = await searchMovies({
       search: search ? `${search} مسلسل` : 'مسلسل',
@@ -1258,36 +958,15 @@ export async function getSeriesList({ search = '', category = null } = {}) {
     });
 
     if (Array.isArray(wpPosts) && wpPosts.length > 0) {
-      // Group episode posts into unified TV show objects
-      const dynamicSeries = groupPostsIntoSeries(wpPosts);
+      // Filter out test/dummy series
+      const realPosts = wpPosts.filter((p) => {
+        const slug = (p.slug || '').toLowerCase();
+        return !slug.startsWith('breaking-bad');
+      });
 
-      // Merge dynamic series with curated series
-      for (const ds of dynamicSeries) {
-        const existingIdx = list.findIndex(
-          (s) => s.slug === ds.slug || s.title.toLowerCase() === ds.title.toLowerCase()
-        );
-        if (existingIdx !== -1) {
-          // Merge dynamic episodes into curated series if missing
-          const existing = list[existingIdx];
-          for (const dSeason of ds.seasons) {
-            let targetSeason = existing.seasons.find((s) => s.seasonNumber === dSeason.seasonNumber);
-            if (!targetSeason) {
-              existing.seasons.push(dSeason);
-            } else {
-              for (const dEp of dSeason.episodes) {
-                if (!targetSeason.episodes.some((e) => e.episodeNumber === dEp.episodeNumber)) {
-                  targetSeason.episodes.push(dEp);
-                }
-              }
-            }
-          }
-          // Recalculate counts
-          existing.seasons.sort((a, b) => a.seasonNumber - b.seasonNumber);
-          existing.seasonsCount = existing.seasons.length;
-          existing.episodesCount = existing.seasons.reduce((acc, s) => acc + s.episodes.length, 0);
-        } else {
-          list.push(ds);
-        }
+      if (realPosts.length > 0) {
+        const dynamicSeries = groupPostsIntoSeries(realPosts);
+        list.push(...dynamicSeries);
       }
     }
   } catch (err) {
@@ -1321,46 +1000,10 @@ export async function getSeriesList({ search = '', category = null } = {}) {
 export async function getSeriesBySlug(slug) {
   if (!slug) return null;
 
-  // 1. Search in curated list
-  const found = CURATED_SERIES.find((s) => s.slug === slug);
-  if (found) {
-    // Enrich with any dynamic episodes from WordPress if available
-    try {
-      const cleanSearch = found.title || slug.replace(/-/g, ' ');
-      const relatedPosts = await searchMovies({ search: cleanSearch, perPage: 25 });
-      if (Array.isArray(relatedPosts) && relatedPosts.length > 0) {
-        const dynamicGrouped = groupPostsIntoSeries(relatedPosts);
-        const dynamicMatch = dynamicGrouped.find(
-          (d) => d.slug === slug || d.title.toLowerCase() === found.title.toLowerCase()
-        );
-        if (dynamicMatch) {
-          const mergedSeasons = [...found.seasons];
-          for (const dSeason of dynamicMatch.seasons) {
-            let targetSeason = mergedSeasons.find((s) => s.seasonNumber === dSeason.seasonNumber);
-            if (!targetSeason) {
-              mergedSeasons.push(dSeason);
-            } else {
-              for (const dEp of dSeason.episodes) {
-                if (!targetSeason.episodes.some((e) => e.episodeNumber === dEp.episodeNumber)) {
-                  targetSeason.episodes.push(dEp);
-                }
-              }
-            }
-          }
-          mergedSeasons.sort((a, b) => a.seasonNumber - b.seasonNumber);
-          return {
-            ...found,
-            seasons: mergedSeasons,
-            seasonsCount: mergedSeasons.length,
-            episodesCount: mergedSeasons.reduce((acc, s) => acc + s.episodes.length, 0),
-          };
-        }
-      }
-    } catch (_) {}
-    return found;
-  }
+  const cleanSlug = slug.toLowerCase();
+  if (cleanSlug.startsWith('breaking-bad')) return null;
 
-  // 2. Search in WordPress by slug or clean series name
+  // Search in WordPress by slug or clean series name
   try {
     const searchTerms = [slug.replace(/-/g, ' '), slug];
     let candidatePosts = [];
@@ -1378,12 +1021,17 @@ export async function getSeriesBySlug(slug) {
     }
 
     if (candidatePosts.length > 0) {
-      const grouped = groupPostsIntoSeries(candidatePosts);
-      // Find the best match
-      const matched =
-        grouped.find((s) => s.slug === slug || slug.startsWith(s.slug) || s.slug.startsWith(slug)) ||
-        grouped[0];
-      if (matched) return matched;
+      const realPosts = candidatePosts.filter((p) => {
+        const s = (p.slug || '').toLowerCase();
+        return !s.startsWith('breaking-bad');
+      });
+      if (realPosts.length > 0) {
+        const grouped = groupPostsIntoSeries(realPosts);
+        const matched =
+          grouped.find((s) => s.slug === slug || slug.startsWith(s.slug) || s.slug.startsWith(slug)) ||
+          grouped[0];
+        if (matched) return matched;
+      }
     }
   } catch (err) {
     console.warn('[Series API] WP getSeriesBySlug notice:', err.message);

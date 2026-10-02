@@ -106,20 +106,21 @@ export default async function sitemap() {
   }
 
   // 4. Dynamic TV Series Routes
-  const seriesSlugs = [
-    'breaking-bad',
-    'game-of-thrones',
-    'house-of-the-dragon',
-    'stranger-things',
-    'chernobyl',
-    'loki',
-  ];
-  const seriesRoutes = seriesSlugs.map((slug) => ({
-    url: `${BASE_URL}/series/${slug}`,
-    lastModified: now,
-    changeFrequency: 'weekly',
-    priority: 0.85,
-  }));
+  let seriesRoutes = [];
+  try {
+    const seriesPosts = await fetchFromWordPress('posts?categories=15&per_page=50');
+    if (Array.isArray(seriesPosts) && seriesPosts.length > 0) {
+      const realSeries = seriesPosts.filter((p) => p && p.slug && !p.slug.startsWith('breaking-bad'));
+      seriesRoutes = realSeries.map((item) => ({
+        url: `${BASE_URL}/series/${item.slug}`,
+        lastModified: now,
+        changeFrequency: 'weekly',
+        priority: 0.85,
+      }));
+    }
+  } catch (err) {
+    console.error('[SITEMAP] Warning: Failed to fetch series for sitemap:', err.message);
+  }
 
   // 5. Return combined sitemap entries (static fallback always preserved)
   return [...staticRoutes, ...categoryRoutes, ...movieRoutes, ...seriesRoutes];
