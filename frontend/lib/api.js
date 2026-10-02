@@ -119,42 +119,70 @@ export function normalizeStreamHgUrl(url) {
 }
 
 /**
- * Normalizes any Vidmoly embed URL to valid embed format: https://vidmoly.me/embed-{code}.html
- * and supports mirror domain vidmoly.to.
- * Handles:
- * - vidmoly.me/embed-{code}.html
- * - vidmoly.me/{code}.html
- * - vidmoly.me/{code}
- * - vidmoly.to/embed-{code}.html
- * - vidmoly.to/{code}.html
- * - vidmoly.to/{code}
+ * Formats and normalizes Vidmoly embed URL into a clean, working embed URL:
+ * https://{targetDomain}/embed-{fileCode}.html
+ * Safely extracts the alphanumeric file code and prevents /embed-embed.html corruption.
+ *
+ * @param {string} url - Raw Vidmoly URL or file code
+ * @param {string} targetDomain - Target mirror domain (default: 'vidmoly.to')
+ * @returns {string} Formatted Vidmoly embed URL
  */
-export function normalizeVidmolyUrl(url, preferredMirror = null) {
-  if (!url || typeof url !== 'string') return url;
-  const match = url.match(/(?:https?:\/\/)?(?:[a-zA-Z0-9.-]+\.)?(vidmoly\.(?:me|to|net|org))\/(?:embed-)?([a-zA-Z0-9]+)(?:\.html)?/i);
-  if (match && match[2]) {
-    const origDomain = match[1].toLowerCase();
-    const code = match[2];
-    if (!['api', 'upload', 'dl', 'contact', 'faq'].includes(code.toLowerCase())) {
-      const domain = preferredMirror || (origDomain.includes('vidmoly.to') ? 'vidmoly.to' : 'vidmoly.me');
-      return `https://${domain}/embed-${code}.html`;
+export function formatVidmolyEmbed(url, targetDomain = "vidmoly.to") {
+  if (!url || typeof url !== 'string') return "";
+  const cleanUrl = url.trim();
+
+  // 1. Primary extraction: matches /embed-CODE.html, /embed/CODE, or /v/CODE
+  let match = cleanUrl.match(/(?:embed-|embed\/|v\/)([a-zA-Z0-9]+)/i);
+
+  // 2. Secondary extraction: matches vidmoly.xxx/CODE.html or vidmoly.xxx/CODE
+  if (!match) {
+    match = cleanUrl.match(/vidmoly\.[a-z0-9-]+\/([a-zA-Z0-9]+)(?:\.html)?/i);
+  }
+
+  // 3. Raw file code pattern fallback (e.g. '85o4zszwyiij')
+  if (!match && /^[a-zA-Z0-9]{6,}$/.test(cleanUrl)) {
+    match = [null, cleanUrl];
+  }
+
+  if (match && match[1]) {
+    const fileCode = match[1];
+    // Reject keywords and corruptions that are not valid video file codes
+    const reserved = ['embed', 'api', 'upload', 'dl', 'contact', 'faq'];
+    if (!reserved.includes(fileCode.toLowerCase())) {
+      return `https://${targetDomain}/embed-${fileCode}.html`;
     }
   }
-  return url;
+
+  return cleanUrl;
 }
 
 /**
- * Switch Vidmoly URL between primary domain (vidmoly.me) and mirror domain (vidmoly.to)
+ * Normalizes any Vidmoly embed URL to valid embed format: https://vidmoly.to/embed-{code}.html
+ * (or preferred mirror domain). Delegates to robust formatVidmolyEmbed.
  */
-export function getVidmolyMirrorUrl(url) {
+export function normalizeVidmolyUrl(url, preferredMirror = "vidmoly.to") {
   if (!url || typeof url !== 'string') return url;
-  const normalized = normalizeVidmolyUrl(url);
-  if (normalized.includes('vidmoly.me')) {
-    return normalized.replace('vidmoly.me', 'vidmoly.to');
-  } else if (normalized.includes('vidmoly.to')) {
-    return normalized.replace('vidmoly.to', 'vidmoly.me');
+  return formatVidmolyEmbed(url, preferredMirror || "vidmoly.to");
+}
+
+/**
+ * Switch Vidmoly URL between primary domain (vidmoly.to) and mirror domain (vidmoly.biz)
+ * Preserves the extracted fileCode and prevents URL corruption.
+ */
+export function getVidmolyMirrorUrl(url, targetDomain = null) {
+  if (!url || typeof url !== 'string') return url;
+  if (targetDomain) {
+    return formatVidmolyEmbed(url, targetDomain);
   }
-  return normalized;
+  // Toggle between vidmoly.to and vidmoly.biz (or legacy vidmoly.me)
+  if (url.includes('vidmoly.biz')) {
+    return formatVidmolyEmbed(url, 'vidmoly.to');
+  } else if (url.includes('vidmoly.to')) {
+    return formatVidmolyEmbed(url, 'vidmoly.biz');
+  } else if (url.includes('vidmoly.me')) {
+    return formatVidmolyEmbed(url, 'vidmoly.to');
+  }
+  return formatVidmolyEmbed(url, 'vidmoly.biz');
 }
 
 /**

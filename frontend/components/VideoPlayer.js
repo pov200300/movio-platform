@@ -2,7 +2,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import Image from 'next/image';
 import CinemaPlayer from './CinemaPlayer';
-import { normalizeStreamHgUrl, normalizeVidmolyUrl, getVidmolyMirrorUrl } from '../lib/api';
+import { normalizeStreamHgUrl, normalizeVidmolyUrl, getVidmolyMirrorUrl, formatVidmolyEmbed } from '../lib/api';
 import styles from './VideoPlayer.module.css';
 
 // Provider label mapping for clean Arabic display
@@ -66,7 +66,7 @@ export default function VideoPlayer({
         .map((s, idx) => {
           let normUrl = normalizeStreamHgUrl(s.url);
           if (s.id === 'vidmoly' || (s.name && s.name.toLowerCase().includes('vidmoly')) || normUrl.includes('vidmoly')) {
-            normUrl = normalizeVidmolyUrl(normUrl);
+            normUrl = formatVidmolyEmbed(normUrl, 'vidmoly.to');
           }
           return {
             id: s.id || `server-${idx + 1}`,
@@ -94,7 +94,7 @@ export default function VideoPlayer({
           id: 'vidmoly',
           name: 'Vidmoly (1080p)',
           label: PROVIDER_LABELS.vidmoly,
-          url: normalizeVidmolyUrl(vUrl),
+          url: formatVidmolyEmbed(vUrl, 'vidmoly.to'),
           fast: true,
         });
       }
@@ -164,7 +164,7 @@ export default function VideoPlayer({
   // Active Server ID: default to first available server in priority order
   const [activeServerId, setActiveServerId] = useState(() => resolvedServers[0]?.id || 'default');
 
-  // Mirror fallback state for Vidmoly (toggles between vidmoly.me and vidmoly.to)
+  // Mirror fallback state for Vidmoly (toggles between vidmoly.to and vidmoly.biz)
   const [useVidmolyMirror, setUseVidmolyMirror] = useState(false);
 
   // Synchronize active server if servers list changes (e.g. episode switch)
@@ -178,7 +178,18 @@ export default function VideoPlayer({
   const activeServer = resolvedServers.find((s) => s.id === activeServerId) || resolvedServers[0];
   const rawActiveUrl = activeServer?.url || null;
   const isVidmoly = activeServer?.id === 'vidmoly' || (rawActiveUrl && rawActiveUrl.includes('vidmoly'));
-  const activeUrl = isVidmoly && useVidmolyMirror ? getVidmolyMirrorUrl(rawActiveUrl) : rawActiveUrl;
+
+  // Formatted server embed URL with safe mirror switching (vidmoly.to <-> vidmoly.biz)
+  const formattedServerUrl = useMemo(() => {
+    if (!rawActiveUrl) return null;
+    if (isVidmoly) {
+      const targetDomain = useVidmolyMirror ? 'vidmoly.biz' : 'vidmoly.to';
+      return formatVidmolyEmbed(rawActiveUrl, targetDomain);
+    }
+    return rawActiveUrl;
+  }, [rawActiveUrl, isVidmoly, useVidmolyMirror]);
+
+  const activeUrl = formattedServerUrl;
 
   // Resolve direct stream link for optional EGYMAX VIP player
   const resolveStream = useCallback(async () => {
@@ -305,16 +316,16 @@ export default function VideoPlayer({
               </button>
             )}
 
-            {/* Vidmoly Mirror Domain Switcher (vidmoly.me <-> vidmoly.to) */}
+            {/* Vidmoly Mirror Domain Switcher (vidmoly.to <-> vidmoly.biz) */}
             {isVidmoly && (
               <button
                 type="button"
                 onClick={() => setUseVidmolyMirror((prev) => !prev)}
                 className={`${styles.serverTab} ${useVidmolyMirror ? styles.activeTab : ''}`}
                 style={{ borderColor: 'rgba(56, 189, 248, 0.4)', color: '#38bdf8' }}
-                title="التبديل بين نطاق vidmoly.me ونطاق vidmoly.to الاحتياطي في حال حجب أحدهما"
+                title="التبديل بين نطاق vidmoly.to ونطاق vidmoly.biz الاحتياطي في حال حجب أحدهما"
               >
-                <span>🔄 مرآة بديلة: {useVidmolyMirror ? 'vidmoly.to' : 'vidmoly.me'}</span>
+                <span>🔄 مرآة بديلة: {useVidmolyMirror ? 'vidmoly.to' : 'vidmoly.biz'}</span>
               </button>
             )}
           </div>
@@ -353,20 +364,17 @@ export default function VideoPlayer({
               <p className={styles.playText}>انقر هنا لبدء المشاهدة</p>
             </div>
           </div>
-        ) : activeServerId !== 'vip' && activeUrl ? (
+        ) : activeServerId !== 'vip' && formattedServerUrl ? (
           /* Dynamic Iframe Embed Switcher */
           <div className={styles.iframeWrapper}>
             <iframe 
-              key={activeUrl}
-              src={activeUrl} 
+              key={formattedServerUrl}
+              src={formattedServerUrl} 
               title={title ? `${title} - ${activeServer?.label || activeServer?.name}` : 'مشغل الفيديو'}
-              width="100%" 
-              height="100%" 
-              frameBorder="0" 
+              className="w-full h-full border-0"
               allowFullScreen 
-              referrerPolicy="no-referrer"
-              allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
-              scrolling="no"
+              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
+              referrerPolicy="no-referrer-when-downgrade"
             />
           </div>
         ) : activeServerId === 'vip' ? (

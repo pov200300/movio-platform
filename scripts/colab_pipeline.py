@@ -141,25 +141,32 @@ def setup_environment(fonts_dir: str = None) -> str:
 
     # 1. Install required apt packages on Debian/Ubuntu/Colab/Lightning.ai (root or sudo)
     if sys.platform.startswith("linux") and shutil.which("apt-get"):
+        is_root = False
         try:
-            pkgs = ["fonts-noto-core", "fonts-noto-extra", "fonts-amiri", "fontconfig"]
-            # Detect root vs non-root (Lightning.ai runs as 'zeus' user, not root)
-            is_root = False
-            try:
-                is_root = os.geteuid() == 0
-            except AttributeError:
-                pass  # Windows — no geteuid()
-            if is_root:
-                cmd = ["apt-get", "install", "-y", "-qq"] + pkgs
-            elif shutil.which("sudo"):
-                cmd = ["sudo", "apt-get", "install", "-y", "-qq"] + pkgs
-            else:
-                cmd = ["apt-get", "install", "-y", "-qq"] + pkgs
-            result = subprocess.run(cmd, capture_output=True, timeout=120)
-            if result.returncode != 0:
-                log("FONTS", f"Apt install returned code {result.returncode}; font packages may not be installed.")
+            is_root = os.geteuid() == 0
+        except AttributeError:
+            pass  # Windows — no geteuid()
+
+        sudo_prefix = [] if is_root else (["sudo"] if shutil.which("sudo") else [])
+        core_pkgs = ["aria2", "ffmpeg", "fontconfig", "fonts-noto-core", "fonts-noto-extra"]
+        optional_pkgs = ["fonts-amiri"]
+
+        # Install essential core packages with --ignore-missing to avoid aborting on deprecated repos
+        try:
+            core_cmd = sudo_prefix + ["apt-get", "install", "-y", "-qq", "--ignore-missing"] + core_pkgs
+            res = subprocess.run(core_cmd, capture_output=True, timeout=120)
+            if res.returncode != 0:
+                log("FONTS", f"Core apt install notice ({res.returncode}); core packages may already exist.")
         except Exception as e:
-            log("FONTS", f"Apt font package notice: {e}")
+            log("FONTS", f"Core apt package notice: {e}")
+
+        # Install optional packages individually with silent fallback
+        for opt_pkg in optional_pkgs:
+            try:
+                opt_cmd = sudo_prefix + ["apt-get", "install", "-y", "-qq", "--ignore-missing", opt_pkg]
+                subprocess.run(opt_cmd, capture_output=True, timeout=60)
+            except Exception:
+                pass
 
     try:
         os.makedirs(fonts_dir, exist_ok=True)
@@ -167,6 +174,7 @@ def setup_environment(fonts_dir: str = None) -> str:
             ("NotoSansArabic-Regular.ttf", "https://github.com/googlefonts/noto-fonts/raw/main/hinted/ttf/NotoSansArabic/NotoSansArabic-Regular.ttf"),
             ("NotoSansArabic-Bold.ttf", "https://github.com/googlefonts/noto-fonts/raw/main/hinted/ttf/NotoSansArabic/NotoSansArabic-Bold.ttf"),
             ("Cairo-SemiBold.ttf", "https://github.com/google/fonts/raw/main/ofl/cairo/static/Cairo-SemiBold.ttf"),
+            ("Amiri-Regular.ttf", "https://github.com/google/fonts/raw/main/ofl/amiri/Amiri-Regular.ttf"),
         ]
         for font_name, url in fonts:
             font_file = os.path.join(fonts_dir, font_name)
@@ -2283,27 +2291,53 @@ def apply_ass_style(ass_text: str) -> str:
 
     return ass_text
 
-def convert_srt_to_ass(srt_text: str, srt_path: str = None, offset_seconds: float = 0.0) -> str:
+def convert_srt_to_ass(
+    srt_content_or_path: str,
+    output_ass_path: str = None,
+    offset_seconds: float = 0.0,
+    **kwargs
+) -> str:
     """
-    Convert SRT subtitle text to ASS (Advanced SubStation Alpha) format with
+    Convert SRT subtitle content or file to ASS (Advanced SubStation Alpha) format with
     embedded Arabic styling on a 1080p virtual canvas. Bypasses FFmpeg's SRT demuxer
-    (avformat_open_input) which fails with 'Unable to open' on certain Arabic-encoded subtitle content,
-    by producing a pre-formatted ASS file that libass reads directly via the 'ass' filter.
-    Supports micro-timing offset adjustment via offset_seconds.
-
-    Resilient against:
-      - Null bytes (\\x00) and UTF-8/16 BOMs (\\ufeff\\ufffe)
-      - Windows CRLF (\\r\\n) and old-Mac CR (\\r) line endings
-      - Invisible Unicode directional marks (RLM, LRM, ALM) & zero-width controls
-      - Flexible timestamp arrows (--> , -> , —> , –>)
-      - Timestamp separators: both comma (00:01:23,456) and period (00:01:23.456)
-      - Variable-length millisecond fields (1-3 digits)
-      - HTML formatting tags (<i>, <b>, <font>)
-      - Fallback sequential line-by-line parser for broken block formatting
-      - Native FFmpeg subtitle converter CLI as unbreakable fallback
+    (avformat_open_input) by producing a pre-formatted ASS file that libass reads directly via the 'subtitles' filter.
+    Supports micro-timing offset adjustment via offset_seconds and ensures output .ass file is written cleanly to disk.
+    Returns the validated path to the output .ass file.
     """
-    if not srt_text:
+    if not srt_content_or_path:
         return ""
+
+    try:
+        offset_seconds = float(offset_seconds)
+    except (ValueError, TypeError):
+        offset_seconds = 0.0
+
+    # 1. Resolve source subtitle text and source file
+    srt_file_source = None
+    if isinstance(srt_content_or_path, str) and len(srt_content_or_path) < 1024 and os.path.exists(srt_content_or_path) and os.path.isfile(srt_content_or_path):
+        srt_file_source = srt_content_or_path
+        try:
+            with open(srt_content_or_path, "rb") as f:
+                raw_bytes = f.read()
+            srt_text = decode_arabic_subtitle_bytes(raw_bytes)
+        except Exception:
+            with open(srt_content_or_path, "r", encoding="utf-8", errors="replace") as f:
+                srt_text = f.read()
+    else:
+        srt_text = str(srt_content_or_path)
+        if "srt_path" in kwargs and kwargs["srt_path"] and os.path.exists(str(kwargs["srt_path"])):
+            srt_file_source = kwargs["srt_path"]
+
+    # 2. Resolve destination ASS file path
+    if not output_ass_path:
+        if srt_file_source:
+            output_ass_path = os.path.splitext(srt_file_source)[0] + ".ass"
+        elif "output_path" in kwargs and kwargs["output_path"]:
+            output_ass_path = kwargs["output_path"]
+        else:
+            import tempfile
+            with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".ass", delete=False) as tf:
+                output_ass_path = tf.name
 
     # ── 0. Pre-clean: strip null bytes, BOMs, normalize newlines, purge bidi marks & tofu glyphs ──
     raw_text = srt_text.replace("\x00", "").lstrip("\ufeff\ufffe").replace("\r\n", "\n").replace("\r", "\n")
@@ -2333,17 +2367,6 @@ def convert_srt_to_ass(srt_text: str, srt_path: str = None, offset_seconds: floa
     time_pattern = re.compile(
         r"(\d{1,2}:\d{2}:\d{2}[,\.]\d{1,3})\s*(?:-->|->|—>|–>)\s*(\d{1,2}:\d{2}:\d{2}[,\.]\d{1,3})"
     )
-
-    def _srt_ts_to_ass(ts: str) -> str:
-        """Convert SRT timestamp (HH:MM:SS,mmm or H:MM:SS.mm) to ASS (H:MM:SS.cc)."""
-        ts = ts.replace(',', '.')
-        parts = ts.split(':')
-        h, mi = int(parts[0]), int(parts[1])
-        sec_parts = parts[2].split('.')
-        s = int(sec_parts[0])
-        ms_raw = sec_parts[1] if len(sec_parts) > 1 else '0'
-        cs = int(ms_raw.ljust(3, '0')[:3]) // 10
-        return f"{h}:{mi:02d}:{s:02d}.{cs:02d}"
 
     def _clean_line(line: str) -> str:
         """Strip HTML tags and residual control characters from a subtitle line."""
@@ -2418,47 +2441,58 @@ def convert_srt_to_ass(srt_text: str, srt_path: str = None, offset_seconds: floa
 
         _append_seq_dialogue()
 
+    ass_content = ""
     if dialogues:
-        return ass_header + '\n'.join(dialogues) + '\n'
+        ass_content = ass_header + '\n'.join(dialogues) + '\n'
+    else:
+        # ── Fallback Native FFmpeg Engine: if Python regex extracted 0 dialogues ──
+        ffmpeg_bin = shutil.which("ffmpeg")
+        if ffmpeg_bin:
+            import tempfile
+            temp_src = srt_file_source
+            need_rm = False
+            if not temp_src or not os.path.exists(temp_src):
+                try:
+                    with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".srt", delete=False) as tf:
+                        tf.write(cleaned)
+                        temp_src = tf.name
+                    need_rm = True
+                except Exception:
+                    temp_src = None
 
-    # ── Fallback Native FFmpeg Engine: if Python regex extracted 0 dialogues ──
-    ffmpeg_bin = shutil.which("ffmpeg")
-    if ffmpeg_bin:
-        import tempfile
-        temp_src = srt_path
-        need_rm = False
-        if not temp_src or not os.path.exists(temp_src):
-            try:
-                with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".srt", delete=False) as tf:
-                    tf.write(cleaned)
-                    temp_src = tf.name
-                need_rm = True
-            except Exception:
-                temp_src = None
+            if temp_src and os.path.exists(temp_src):
+                temp_ass = temp_src + ".ffmpeg.ass"
+                try:
+                    subprocess.run(
+                        [ffmpeg_bin, "-y", "-nostdin", "-sub_charenc", "UTF-8", "-i", temp_src, temp_ass],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        check=False
+                    )
+                    if os.path.exists(temp_ass) and os.path.getsize(temp_ass) > 0:
+                        with open(temp_ass, "r", encoding="utf-8", errors="replace") as af:
+                            raw_ass = af.read()
+                        if "Dialogue:" in raw_ass:
+                            ass_content = apply_ass_style(raw_ass)
+                except Exception:
+                    pass
+                finally:
+                    if need_rm and temp_src and os.path.exists(temp_src):
+                        try: os.remove(temp_src)
+                        except Exception: pass
+                    if os.path.exists(temp_ass):
+                        try: os.remove(temp_ass)
+                        except Exception: pass
 
-        if temp_src and os.path.exists(temp_src):
-            temp_ass = temp_src + ".ass"
-            try:
-                subprocess.run(
-                    [ffmpeg_bin, "-y", "-nostdin", "-sub_charenc", "UTF-8", "-i", temp_src, temp_ass],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    check=False
-                )
-                if os.path.exists(temp_ass) and os.path.getsize(temp_ass) > 0:
-                    with open(temp_ass, "r", encoding="utf-8", errors="replace") as af:
-                        raw_ass = af.read()
-                    if "Dialogue:" in raw_ass:
-                        return apply_ass_style(raw_ass)
-            except Exception:
-                pass
-            finally:
-                if need_rm and temp_src and os.path.exists(temp_src):
-                    try: os.remove(temp_src)
-                    except Exception: pass
-                if os.path.exists(temp_ass):
-                    try: os.remove(temp_ass)
-                    except Exception: pass
+    # Clean write to output_ass_path and return validated path
+    if ass_content and "Dialogue:" in ass_content:
+        out_dir = os.path.dirname(os.path.abspath(output_ass_path))
+        if out_dir:
+            os.makedirs(out_dir, exist_ok=True)
+        with open(output_ass_path, "w", encoding="utf-8", newline="\n") as out_f:
+            out_f.write(ass_content)
+        if os.path.exists(output_ass_path) and os.path.getsize(output_ass_path) > 0:
+            return os.path.abspath(output_ass_path)
 
     return ""
 
@@ -2602,18 +2636,17 @@ def burn_arabic_subtitles(video_path: str, srt_path: str, sub_offset_seconds: fl
 
     # 2. Convert sanitized SRT to ASS with embedded Arabic font style
     # (eliminates dependency on libass force_style font lookup)
+    use_ass = False
     try:
-        ass_content = convert_srt_to_ass(staged_srt_text, srt_path=staged_clean_srt, offset_seconds=0.0)
-        if ass_content and "Dialogue:" in ass_content:
-            with open(staged_sub_ass, 'w', encoding='utf-8', newline='\n') as af:
-                af.write(ass_content)
-            log("HARDSUB", f"✅ Converted SRT -> ASS with embedded Noto Sans Arabic style ({os.path.getsize(staged_sub_ass)} bytes).")
+        ass_path = convert_srt_to_ass(staged_clean_srt, output_ass_path=staged_sub_ass, offset_seconds=0.0)
+        if ass_path and os.path.exists(ass_path) and os.path.getsize(ass_path) > 0:
+            staged_sub_ass = ass_path
             use_ass = True
+            log("HARDSUB", f"✅ Converted SRT -> ASS with embedded Noto Sans Arabic style ({os.path.getsize(staged_sub_ass)} bytes).")
         else:
-            log("HARDSUB", "⚠️ ASS conversion produced no dialogues; falling back to SRT with force_style.")
-            use_ass = False
+            log("HARDSUB", "⚠️ ASS file missing or 0 bytes; falling back to SRT with force_style.")
     except Exception as e:
-        log("HARDSUB", f"⚠️ ASS conversion error: {e}; falling back to SRT with force_style.")
+        log("HARDSUB", f"⚠️ ASS conversion notice: {e}; falling back to SRT with force_style.")
         use_ass = False
 
     # Stage input video via symlink (instant & zero disk overhead on Linux/Colab)
@@ -2639,10 +2672,11 @@ def burn_arabic_subtitles(video_path: str, srt_path: str, sub_offset_seconds: fl
     fonts_dir = get_system_fonts_dir()
     fonts_dir_escaped = fonts_dir.replace("\\", "/").replace(":", r"\:")
 
-    # Construct subtitle filter: prefer ASS (embedded font style) over SRT+force_style
-    if use_ass:
+    # Construct subtitle filter: prioritize ASS file, only falling back to SRT if ASS is missing or empty
+    if use_ass and os.path.exists(staged_sub_ass) and os.path.getsize(staged_sub_ass) > 0:
         sub_filter_rel = f"subtitles='sub.ass':fontsdir='{fonts_dir_escaped}'"
     else:
+        use_ass = False
         sub_style = "FontName=Noto Sans Arabic,FontSize=29,Bold=0,Outline=0.8,Shadow=0.4,MarginV=10,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Alignment=2"
         sub_filter_rel = f"subtitles='sub.srt':fontsdir='{fonts_dir_escaped}':force_style='{sub_style}'"
 
@@ -2920,13 +2954,13 @@ def generate_60s_preview_sample(
 
             # Convert sliced SRT to ASS for reliable font embedding
             try:
-                preview_ass_content = convert_srt_to_ass(sliced_srt, srt_path=preview_sliced_srt, offset_seconds=0.0)
-                if preview_ass_content and "Dialogue:" in preview_ass_content:
-                    preview_sub_ass = os.path.join(preview_dir, "preview_sub.ass")
-                    with open(preview_sub_ass, 'w', encoding='utf-8', newline='\n') as af:
-                        af.write(preview_ass_content)
-                    preview_sub_file = preview_sub_ass
-                    log("PREVIEW", "✅ Converted sliced SRT -> ASS with embedded Arabic font style.")
+                preview_sub_ass = os.path.join(preview_dir, "preview_sub.ass")
+                ass_path = convert_srt_to_ass(preview_sliced_srt, output_ass_path=preview_sub_ass, offset_seconds=0.0)
+                if ass_path and os.path.exists(ass_path) and os.path.getsize(ass_path) > 0:
+                    preview_sub_file = ass_path
+                    log("PREVIEW", f"✅ Converted sliced SRT -> ASS with embedded Arabic font style ({os.path.getsize(ass_path)} bytes).")
+                else:
+                    log("PREVIEW", "⚠️ ASS output missing or 0 bytes; falling back to SRT with force_style.")
             except Exception as ass_err:
                 log("PREVIEW", f"ASS conversion notice: {ass_err}; using SRT with force_style fallback.")
         else:
@@ -2938,7 +2972,7 @@ def generate_60s_preview_sample(
     fonts_dir_escaped = fonts_dir.replace('\\', '/').replace(':', r'\:')
 
     burn_cmd = [ffmpeg_bin, "-y", "-nostdin", "-i", preview_raw_clip]
-    if has_subs and os.path.exists(preview_sub_file):
+    if has_subs and os.path.exists(preview_sub_file) and os.path.getsize(preview_sub_file) > 0:
         escaped_sub = preview_sub_file.replace('\\', '/').replace(':', r'\:')
         if preview_sub_file.endswith('.ass'):
             sub_filter = f"subtitles='{escaped_sub}':fontsdir='{fonts_dir_escaped}'"

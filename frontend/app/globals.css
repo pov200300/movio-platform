@@ -115,3 +115,17 @@ img {
   background: var(--accent-red);
   color: #ffffff;
 }
+
+/* Layout Utilities */
+.w-full {
+  width: 100%;
+}
+
+.h-full {
+  height: 100%;
+}
+
+.border-0 {
+  border: 0 !important;
+}
+
