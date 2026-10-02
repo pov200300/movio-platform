@@ -139,12 +139,25 @@ def setup_environment(fonts_dir: str = None) -> str:
     if not fonts_dir:
         fonts_dir = get_system_fonts_dir()
 
-    # 1. Install required apt packages on Debian/Ubuntu/Colab/Lightning.ai if root
+    # 1. Install required apt packages on Debian/Ubuntu/Colab/Lightning.ai (root or sudo)
     if sys.platform.startswith("linux") and shutil.which("apt-get"):
         try:
             pkgs = ["fonts-noto-core", "fonts-noto-extra", "fonts-amiri", "fontconfig"]
-            cmd = ["apt-get", "install", "-y", "-qq"] + pkgs
-            subprocess.run(cmd, capture_output=True, timeout=120)
+            # Detect root vs non-root (Lightning.ai runs as 'zeus' user, not root)
+            is_root = False
+            try:
+                is_root = os.geteuid() == 0
+            except AttributeError:
+                pass  # Windows — no geteuid()
+            if is_root:
+                cmd = ["apt-get", "install", "-y", "-qq"] + pkgs
+            elif shutil.which("sudo"):
+                cmd = ["sudo", "apt-get", "install", "-y", "-qq"] + pkgs
+            else:
+                cmd = ["apt-get", "install", "-y", "-qq"] + pkgs
+            result = subprocess.run(cmd, capture_output=True, timeout=120)
+            if result.returncode != 0:
+                log("FONTS", f"Apt install returned code {result.returncode}; font packages may not be installed.")
         except Exception as e:
             log("FONTS", f"Apt font package notice: {e}")
 
@@ -162,9 +175,14 @@ def setup_environment(fonts_dir: str = None) -> str:
                 try:
                     r = requests.get(url, timeout=15)
                     if r.status_code == 200 and len(r.content) > 1000:
-                        with open(font_file, "wb") as f:
-                            f.write(r.content)
-                        log("FONTS", f"✅ Font provisioned -> {font_name}")
+                        # Validate TTF magic bytes: TrueType = 00 01 00 00, OpenType = 4F 54 54 4F
+                        ttf_magic = r.content[:4]
+                        if ttf_magic in (b'\x00\x01\x00\x00', b'OTTO'):
+                            with open(font_file, "wb") as f:
+                                f.write(r.content)
+                            log("FONTS", f"✅ Font provisioned -> {font_name} ({len(r.content)} bytes, valid TTF)")
+                        else:
+                            log("FONTS", f"⚠️ Downloaded {font_name} has invalid TTF magic bytes ({ttf_magic[:4].hex()}); skipping (possible HTML error page).")
                 except Exception as dl_err:
                     log("FONTS", f"Notice downloading {font_name}: {dl_err}")
 
@@ -1445,11 +1463,14 @@ def slice_srt_content_for_preview(srt_text: str, preview_start_sec: float, previ
             clip_s = max(0.0, s_sec - preview_start_sec)
             clip_e = min(preview_duration_sec, e_sec - preview_start_sec)
             if clip_e > clip_s + 0.1:
-                dialogue = "\n".join([tl for tl in lines[timing_idx + 1:] if tl.strip()])
-                start_str = seconds_to_srt_ts(clip_s)
-                end_str = seconds_to_srt_ts(clip_e)
-                new_blocks.append(f"{idx}\n{start_str} --> {end_str}\n{dialogue}")
-                idx += 1
+                cleaned_dialogue = [sanitize_subtitle_text(tl) for tl in lines[timing_idx + 1:] if tl.strip()]
+                cleaned_dialogue = [tl for tl in cleaned_dialogue if tl]
+                if cleaned_dialogue:
+                    dialogue = "\n".join(cleaned_dialogue)
+                    start_str = seconds_to_srt_ts(clip_s)
+                    end_str = seconds_to_srt_ts(clip_e)
+                    new_blocks.append(f"{idx}\n{start_str} --> {end_str}\n{dialogue}")
+                    idx += 1
     return "\n\n".join(new_blocks) + "\n" if new_blocks else ""
 
 
@@ -2540,57 +2561,60 @@ def burn_arabic_subtitles(video_path: str, srt_path: str, sub_offset_seconds: fl
         log("HARDSUB", "ffmpeg not found in PATH; skipping hardsubbing and using raw video.")
         return video_path
 
-    # 1. Force UTF-8 conversion testing priority encodings, auto-repair mojibake, and purge bidi/tofu artifacts
-    try:
-        clean_sub_text = read_subtitle_file_robustly(srt_path)
-        clean_sub_text = sanitize_subtitle_text(fix_arabic_mojibake(clean_sub_text))
-        ar_count = len(re.findall(r'[\u0600-\u06FF]', clean_sub_text)) if clean_sub_text else 0
-        if not clean_sub_text or ar_count < 30:
-            log("HARDSUB", f"⚠️ Subtitle '{srt_path}' contains fewer than 30 Arabic Unicode characters ({ar_count}); using original video.")
-            return video_path
-
-        log("SUBS", f"ℹ️ Subtitle decoded robustly, auto-repaired, sanitized, and verified ({ar_count} Arabic characters).")
-    except Exception as e:
-        log("HARDSUB", f"⚠️ Error validating subtitle encoding: {e}; falling back to raw video.")
-        return video_path
-
-    # 2. Implement Flat Staging Directory Architecture
+    # 1. Single-pass subtitle sanitization: decode, repair mojibake, sanitize, apply timing offset
     staging_dir = "/content/staging" if os.path.exists("/content") else os.path.abspath("./staging_temp")
     os.makedirs(staging_dir, exist_ok=True)
-
+    staged_clean_srt = os.path.join(staging_dir, "sub.srt")
+    staged_sub_ass = os.path.join(staging_dir, "sub.ass")
     staged_input = os.path.join(staging_dir, "input_video.mp4")
-    staged_sub = os.path.join(staging_dir, "sub.ass")
-    staged_output = os.path.join(staging_dir, "output_subbed.mp4")
+    staged_output = os.path.join(staging_dir, "output_1080p.mp4")
 
-    # Clean previous staging artifacts if present
-    for p in [staged_input, staged_sub, staged_output]:
+    # Clean previous staging artifacts
+    for p in [staged_clean_srt, staged_sub_ass, staged_input, staged_output]:
         if os.path.exists(p) or os.path.islink(p):
             try:
                 os.remove(p)
             except Exception:
                 pass
 
-    staged_clean_srt = os.path.join(staging_dir, "sub.srt")
     try:
-        with open(staged_clean_srt, 'w', encoding='utf-8', newline='\n') as csf:
-            csf.write(clean_sub_text)
-        sanitize_subtitle_file(staged_clean_srt, staged_clean_srt, offset_seconds=sub_offset_seconds)
+        # Copy raw subtitle to staging and sanitize ONCE via sanitize_srt_file
+        # (handles binary decoding, mojibake repair, sanitize_subtitle_text, timing offset)
+        import shutil as _shutil_copy
+        _shutil_copy.copy2(srt_path, staged_clean_srt)
+        sanitize_srt_file(staged_clean_srt, staged_clean_srt, offset_seconds=sub_offset_seconds)
     except Exception as e:
-        log("HARDSUB", f"⚠️ Could not write {staged_clean_srt}: {e}")
-        staged_clean_srt = srt_path
+        log("HARDSUB", f"⚠️ Error during subtitle sanitization: {e}; falling back to raw video.")
+        return video_path
 
-    # Validate output subtitle file in staging before invoking FFmpeg
+    # Validate sanitized subtitle has enough Arabic content
     try:
         with open(staged_clean_srt, 'r', encoding='utf-8') as vf:
-            staged_check_text = vf.read()
-        staged_ar_count = len(re.findall(r'[\u0600-\u06FF]', staged_check_text))
+            staged_srt_text = vf.read()
+        staged_ar_count = len(re.findall(r'[\u0600-\u06FF]', staged_srt_text))
         if staged_ar_count < 30:
-            log("HARDSUB", f"⚠️ Staged subtitle {staged_clean_srt} contains fewer than 30 Arabic characters ({staged_ar_count}); aborting hardsub and using original video.")
+            log("HARDSUB", f"⚠️ Subtitle '{srt_path}' contains fewer than 30 Arabic characters ({staged_ar_count}); using original video.")
             return video_path
-        log("HARDSUB", f"✅ Staged subtitle validated on disk ({staged_ar_count} Arabic characters) before invoking FFmpeg.")
+        log("SUBS", f"ℹ️ Subtitle sanitized and verified ({staged_ar_count} Arabic characters).")
     except Exception as e:
         log("HARDSUB", f"⚠️ Error validating staged subtitle file: {e}; using original video.")
         return video_path
+
+    # 2. Convert sanitized SRT to ASS with embedded Arabic font style
+    # (eliminates dependency on libass force_style font lookup)
+    try:
+        ass_content = convert_srt_to_ass(staged_srt_text, srt_path=staged_clean_srt, offset_seconds=0.0)
+        if ass_content and "Dialogue:" in ass_content:
+            with open(staged_sub_ass, 'w', encoding='utf-8', newline='\n') as af:
+                af.write(ass_content)
+            log("HARDSUB", f"✅ Converted SRT -> ASS with embedded Noto Sans Arabic style ({os.path.getsize(staged_sub_ass)} bytes).")
+            use_ass = True
+        else:
+            log("HARDSUB", "⚠️ ASS conversion produced no dialogues; falling back to SRT with force_style.")
+            use_ass = False
+    except Exception as e:
+        log("HARDSUB", f"⚠️ ASS conversion error: {e}; falling back to SRT with force_style.")
+        use_ass = False
 
     # Stage input video via symlink (instant & zero disk overhead on Linux/Colab)
     video_abs_path = os.path.abspath(video_path)
@@ -2604,7 +2628,6 @@ def burn_arabic_subtitles(video_path: str, srt_path: str, sub_offset_seconds: fl
         log("HARDSUB", f"Symlink notice: {e}; referencing input path directly.")
         ffmpeg_input = video_abs_path
 
-    staged_output = os.path.join(staging_dir, "output_1080p.mp4")
     if os.path.exists(staged_output):
         try: os.remove(staged_output)
         except Exception: pass
@@ -2615,8 +2638,13 @@ def burn_arabic_subtitles(video_path: str, srt_path: str, sub_offset_seconds: fl
 
     fonts_dir = get_system_fonts_dir()
     fonts_dir_escaped = fonts_dir.replace("\\", "/").replace(":", r"\:")
-    sub_style = "FontName=Noto Sans Arabic,FontSize=29,Bold=0,Outline=0.8,Shadow=0.4,MarginV=10,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Alignment=2"
-    sub_filter_rel = f"subtitles='sub.srt':fontsdir='{fonts_dir_escaped}':force_style='{sub_style}'"
+
+    # Construct subtitle filter: prefer ASS (embedded font style) over SRT+force_style
+    if use_ass:
+        sub_filter_rel = f"subtitles='sub.ass':fontsdir='{fonts_dir_escaped}'"
+    else:
+        sub_style = "FontName=Noto Sans Arabic,FontSize=29,Bold=0,Outline=0.8,Shadow=0.4,MarginV=10,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Alignment=2"
+        sub_filter_rel = f"subtitles='sub.srt':fontsdir='{fonts_dir_escaped}':force_style='{sub_style}'"
 
     # 4K Pre-scale Detection: If source is > 1080p (2160p/4K/UHD), prepend scale filter
     # before subtitle burn-in to avoid libass rendering on 8.3M-pixel frames (boosts NVENC 0.4x -> 2.5x)
@@ -2642,7 +2670,10 @@ def burn_arabic_subtitles(video_path: str, srt_path: str, sub_offset_seconds: fl
             log("HARDSUB", "4K/UHD source detected (filename match). Pre-scaling to 1080p before subtitle rendering.")
 
     if is_4k_source:
-        sub_filter_rel = f"scale=-2:1080,subtitles='sub.srt':fontsdir='{fonts_dir_escaped}':force_style='{sub_style}'"
+        if use_ass:
+            sub_filter_rel = f"scale=-2:1080,subtitles='sub.ass':fontsdir='{fonts_dir_escaped}'"
+        else:
+            sub_filter_rel = f"scale=-2:1080,subtitles='sub.srt':fontsdir='{fonts_dir_escaped}':force_style='{sub_style}'"
 
     ffmpeg_log = os.path.join(staging_dir, "ffmpeg_process.log")
     log("HARDSUB", f"Burning Arabic subtitles into 1080p frames ({accel['description']}): output_1080p.mp4 in {staging_dir}...")
@@ -2658,6 +2689,16 @@ def burn_arabic_subtitles(video_path: str, srt_path: str, sub_offset_seconds: fl
 
     with open(ffmpeg_log, "w", encoding="utf-8") as lf:
         proc = subprocess.run(cmd, stdout=lf, stderr=lf, cwd=staging_dir, timeout=14400)
+    # Parse FFmpeg log for libass font selection diagnostic
+    try:
+        with open(ffmpeg_log, "r", encoding="utf-8", errors="replace") as diag_f:
+            ffmpeg_output = diag_f.read()
+        for diag_line in ffmpeg_output.split('\n'):
+            if 'fontselect:' in diag_line.lower() or 'font provider' in diag_line.lower():
+                log("HARDSUB", f"libass font diagnostic: {diag_line.strip()}")
+    except Exception:
+        pass
+
     if proc.returncode != 0:
         err_snippet = ""
         try:
@@ -2666,11 +2707,18 @@ def burn_arabic_subtitles(video_path: str, srt_path: str, sub_offset_seconds: fl
         except Exception:
             pass
         log("HARDSUB", f"Notice on relative subtitle filter ({proc.returncode}): {err_snippet}. Retrying with escaped absolute subtitle path...")
-        sub_abs_escaped = os.path.abspath(staged_clean_srt).replace("\\", "/").replace(":", r"\:")
-        if is_4k_source:
-            sub_filter_abs = f"scale=-2:1080,subtitles='{sub_abs_escaped}':fontsdir='{fonts_dir_escaped}':force_style='{sub_style}'"
+        if use_ass:
+            sub_abs_escaped = os.path.abspath(staged_sub_ass).replace("\\", "/").replace(":", r"\:")
+            if is_4k_source:
+                sub_filter_abs = f"scale=-2:1080,subtitles='{sub_abs_escaped}':fontsdir='{fonts_dir_escaped}'"
+            else:
+                sub_filter_abs = f"subtitles='{sub_abs_escaped}':fontsdir='{fonts_dir_escaped}'"
         else:
-            sub_filter_abs = f"subtitles='{sub_abs_escaped}':fontsdir='{fonts_dir_escaped}':force_style='{sub_style}'"
+            sub_abs_escaped = os.path.abspath(staged_clean_srt).replace("\\", "/").replace(":", r"\:")
+            if is_4k_source:
+                sub_filter_abs = f"scale=-2:1080,subtitles='{sub_abs_escaped}':fontsdir='{fonts_dir_escaped}':force_style='{sub_style}'"
+            else:
+                sub_filter_abs = f"subtitles='{sub_abs_escaped}':fontsdir='{fonts_dir_escaped}':force_style='{sub_style}'"
         cmd_abs = [
             "ffmpeg", "-y", "-nostdin",
             "-i", ffmpeg_input,
@@ -2851,12 +2899,12 @@ def generate_60s_preview_sample(
 
     # Slice subtitles for the 60s preview window
     has_subs = False
+    preview_sub_file = preview_sliced_srt  # default to SRT
     if srt_path and os.path.exists(srt_path):
-        clean_text = read_subtitle_file_robustly(srt_path)
-        clean_text = sanitize_subtitle_text(fix_arabic_mojibake(clean_text))
+        # Single-pass sanitization: copy raw -> sanitize_srt_file once
+        import shutil as _shutil_copy
         temp_clean = os.path.join(preview_dir, "temp_sub.srt")
-        with open(temp_clean, "w", encoding="utf-8", newline="\n") as tf:
-            tf.write(clean_text)
+        _shutil_copy.copy2(srt_path, temp_clean)
         sanitize_srt_file(temp_clean, temp_clean, offset_seconds=sub_offset_seconds)
         with open(temp_clean, "r", encoding="utf-8") as tf:
             full_clean = tf.read()
@@ -2869,19 +2917,34 @@ def generate_60s_preview_sample(
                 sf.write(sliced_srt)
             has_subs = True
             log("PREVIEW", "✅ Sliced Arabic subtitles for 60s preview window.")
+
+            # Convert sliced SRT to ASS for reliable font embedding
+            try:
+                preview_ass_content = convert_srt_to_ass(sliced_srt, srt_path=preview_sliced_srt, offset_seconds=0.0)
+                if preview_ass_content and "Dialogue:" in preview_ass_content:
+                    preview_sub_ass = os.path.join(preview_dir, "preview_sub.ass")
+                    with open(preview_sub_ass, 'w', encoding='utf-8', newline='\n') as af:
+                        af.write(preview_ass_content)
+                    preview_sub_file = preview_sub_ass
+                    log("PREVIEW", "✅ Converted sliced SRT -> ASS with embedded Arabic font style.")
+            except Exception as ass_err:
+                log("PREVIEW", f"ASS conversion notice: {ass_err}; using SRT with force_style fallback.")
         else:
             log("PREVIEW", "⚠️ No subtitle dialogue entries fell within this 60s window.")
 
     # Burn subtitles into preview sample in ~10 seconds
     log("PREVIEW", "🔥 Burning subtitles into 60s preview sample...")
     fonts_dir = get_system_fonts_dir()
-    fonts_dir_escaped = fonts_dir.replace('\\', '/').replace(':', '\\:')
-    sub_style = "FontName=Noto Sans Arabic,FontSize=29,Bold=0,Outline=0.8,Shadow=0.4,MarginV=10,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Alignment=2"
+    fonts_dir_escaped = fonts_dir.replace('\\', '/').replace(':', r'\:')
 
     burn_cmd = [ffmpeg_bin, "-y", "-nostdin", "-i", preview_raw_clip]
-    if has_subs and os.path.exists(preview_sliced_srt):
-        escaped_srt = preview_sliced_srt.replace('\\', '/').replace(':', '\\:')
-        sub_filter = f"subtitles='{escaped_srt}':fontsdir='{fonts_dir_escaped}':force_style='{sub_style}'"
+    if has_subs and os.path.exists(preview_sub_file):
+        escaped_sub = preview_sub_file.replace('\\', '/').replace(':', r'\:')
+        if preview_sub_file.endswith('.ass'):
+            sub_filter = f"subtitles='{escaped_sub}':fontsdir='{fonts_dir_escaped}'"
+        else:
+            sub_style = "FontName=Noto Sans Arabic,FontSize=29,Bold=0,Outline=0.8,Shadow=0.4,MarginV=10,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Alignment=2"
+            sub_filter = f"subtitles='{escaped_sub}':fontsdir='{fonts_dir_escaped}':force_style='{sub_style}'"
         burn_cmd.extend(["-vf", sub_filter])
     burn_cmd.extend([
         "-c:v", "libx264", "-preset", "ultrafast", "-crf", "22",
@@ -2890,6 +2953,11 @@ def generate_60s_preview_sample(
     ])
 
     burn_res = subprocess.run(burn_cmd, capture_output=True, text=True, timeout=90)
+    # Parse libass font selection diagnostic from preview burn
+    if burn_res.stderr:
+        for diag_line in burn_res.stderr.split('\n'):
+            if 'fontselect:' in diag_line.lower() or 'font provider' in diag_line.lower():
+                log("PREVIEW", f"libass font diagnostic: {diag_line.strip()}")
     if burn_res.returncode != 0 or not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
         raise RuntimeError(f"FFmpeg failed to burn subtitles into preview: {burn_res.stderr[-300:] if burn_res.stderr else 'unknown error'}")
 
