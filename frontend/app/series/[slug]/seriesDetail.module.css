@@ -331,6 +331,160 @@
   color: var(--accent-red);
 }
 
+.seasonCountBadge {
+  background: rgba(255, 255, 255, 0.12);
+  color: #e2e8f0;
+  font-size: 0.75rem;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  margin-right: 6px;
+}
+
+.episodeReleaseTag {
+  background: rgba(2, 132, 199, 0.15);
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  color: #38bdf8;
+  font-size: 0.72rem;
+  font-weight: 800;
+  padding: 2px 7px;
+  border-radius: var(--radius-sm);
+}
+
+.episodeFooter {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 4px;
+}
+
+.playIconActive {
+  font-size: 0.78rem;
+  font-weight: 800;
+  color: var(--accent-red);
+}
+
+.playIconIdle {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+/* Episode Dual-Quality Download Bar */
+.episodeDownloadCard {
+  background: var(--bg-surface);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-lg);
+  padding: 1.5rem 1.75rem;
+  margin-top: 1.5rem;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+}
+
+.downloadCardHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1.25rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  padding-bottom: 0.75rem;
+}
+
+.downloadCardTitle {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 1.15rem;
+  font-weight: 800;
+  color: #ffffff;
+}
+
+.downloadMetaBadge {
+  background: rgba(2, 132, 199, 0.15);
+  border: 1px solid rgba(56, 189, 248, 0.4);
+  color: #38bdf8;
+  font-size: 0.8rem;
+  font-weight: 800;
+  padding: 3px 10px;
+  border-radius: var(--radius-full);
+}
+
+.downloadButtonsGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 1rem;
+}
+
+.downloadBtn {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 1rem 1.25rem;
+  border-radius: var(--radius-md);
+  text-decoration: none;
+  transition: all 0.25s ease;
+  position: relative;
+  overflow: hidden;
+}
+
+.downloadBtn:hover {
+  transform: translateY(-2px);
+}
+
+.downloadBtn1080 {
+  background: linear-gradient(135deg, rgba(2, 132, 199, 0.2) 0%, rgba(14, 165, 233, 0.08) 100%);
+  border: 1px solid rgba(56, 189, 248, 0.4);
+  color: #ffffff;
+}
+
+.downloadBtn1080:hover {
+  border-color: #38bdf8;
+  box-shadow: 0 8px 25px rgba(2, 132, 199, 0.35);
+}
+
+.downloadBtn720 {
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.2) 0%, rgba(5, 150, 105, 0.08) 100%);
+  border: 1px solid rgba(52, 211, 153, 0.4);
+  color: #ffffff;
+}
+
+.downloadBtn720:hover {
+  border-color: #34d399;
+  box-shadow: 0 8px 25px rgba(16, 185, 129, 0.35);
+}
+
+.downloadBtnMirror {
+  background: linear-gradient(135deg, rgba(139, 92, 246, 0.2) 0%, rgba(109, 40, 217, 0.08) 100%);
+  border: 1px solid rgba(167, 139, 250, 0.4);
+  color: #ffffff;
+}
+
+.downloadBtnMirror:hover {
+  border-color: #a78bfa;
+  box-shadow: 0 8px 25px rgba(139, 92, 246, 0.35);
+}
+
+.downloadBtnIcon {
+  font-size: 1.6rem;
+  flex-shrink: 0;
+}
+
+.downloadBtnContent {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.downloadBtnLabel {
+  font-size: 0.95rem;
+  font-weight: 800;
+  color: #ffffff;
+}
+
+.downloadBtnServer {
+  font-size: 0.78rem;
+  color: #94a3b8;
+}
+
 @media (max-width: 992px) {
   .heroCard {
     grid-template-columns: 1fr;
@@ -360,5 +514,8 @@
   }
   .episodeCard {
     padding: 0.75rem;
+  }
+  .downloadButtonsGrid {
+    grid-template-columns: 1fr;
   }
 }

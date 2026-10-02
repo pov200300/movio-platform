@@ -1081,62 +1081,212 @@ export const CURATED_SERIES = [
 ];
 
 /**
- * Fetch series list with optional search and category filters
+ * Groups WordPress posts (episodes / series posts) into unified TV Show entities.
+ * Ensures individual episodes are NEVER listed as standalone cards in the catalog.
+ * Groups by show_name / series_slug and aggregates distinct seasons and episodes.
+ */
+export function groupPostsIntoSeries(posts) {
+  if (!Array.isArray(posts) || posts.length === 0) return [];
+
+  const seriesMap = new Map();
+
+  for (const post of posts) {
+    if (!post) continue;
+    const movie = parseMovieData(post);
+    const meta = { ...(post.meta_input || {}), ...(post.meta || {}) };
+
+    const rawTitle = movie.rawTitle || movie.title || '';
+    const cleanSlug = movie.slug || '';
+
+    // 1. Determine show_name / series_slug from explicit metadata if provided
+    let seriesSlug = meta.series_slug || meta.show_slug || meta._series_slug;
+    let seriesTitle = meta.series_name || meta.show_name || meta._series_name;
+    let seasonNumber = parseInt(meta.season_number || meta.season || meta._season || 0, 10);
+    let episodeNumber = parseInt(meta.episode_number || meta.episode || meta._episode || 0, 10);
+
+    // 2. Parse SxxExx (e.g. S01E05 or S1E5) from title or slug
+    const seMatch = (cleanSlug + ' ' + rawTitle).match(/\b[sS](\d+)[eE](\d+)\b/);
+    if (seMatch) {
+      if (!seasonNumber) seasonNumber = parseInt(seMatch[1], 10);
+      if (!episodeNumber) episodeNumber = parseInt(seMatch[2], 10);
+    }
+
+    // Parse Arabic Season: "الموسم 2" or "موسم 2" or "الموسم الثاني"
+    if (!seasonNumber) {
+      const seasonMatch = rawTitle.match(/(?:الموسم|موسم|Season)\s*(\d+)/i);
+      if (seasonMatch) seasonNumber = parseInt(seasonMatch[1], 10);
+    }
+
+    // Parse Arabic Episode: "الحلقة 4" or "حلقة 4"
+    if (!episodeNumber) {
+      const epMatch = rawTitle.match(/(?:الحلقة|حلقة|Episode|Ep)\s*(\d+)/i);
+      if (epMatch) episodeNumber = parseInt(epMatch[1], 10);
+    }
+
+    // Default to season 1 / episode 1 if unparsed
+    if (!seasonNumber) seasonNumber = 1;
+    if (!episodeNumber) episodeNumber = 1;
+
+    // Clean show title from episode and quality artifacts
+    if (!seriesTitle) {
+      let cleanName = rawTitle
+        .replace(/^مسلسل\s+/i, '')
+        .replace(/(?:الموسم|موسم|Season)\s*\d+/ig, '')
+        .replace(/(?:الحلقة|حلقة|Episode|Ep)\s*\d+/ig, '')
+        .replace(/\b[sS]\d+[eE]\d+\b/ig, '')
+        .replace(/(?:مترجم|مدبلج|كامل|اون لاين|HD|FHD|1080p|720p|4K)/ig, '')
+        .replace(/[-–—_:]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+      seriesTitle = cleanName || movie.title;
+    }
+
+    // Clean show slug from episode/season suffix
+    if (!seriesSlug) {
+      let s = cleanSlug
+        .replace(/-s\d+e\d+/gi, '')
+        .replace(/-season-\d+/gi, '')
+        .replace(/-episode-\d+/gi, '')
+        .replace(/-ep-\d+/gi, '')
+        .replace(/-الموسم-\d+/gi, '')
+        .replace(/-الحلقة-\d+/gi, '')
+        .replace(/-+/g, '-')
+        .replace(/^-|-$/g, '');
+      seriesSlug = s || movie.slug;
+    }
+
+    // Resolve or initialize the unified TV Show entity in seriesMap
+    if (!seriesMap.has(seriesSlug)) {
+      seriesMap.set(seriesSlug, {
+        id: `wp-${seriesSlug}`,
+        slug: seriesSlug,
+        title: seriesTitle,
+        titleAr: movie.titleAr || (rawTitle.includes('مسلسل') ? `مسلسل ${seriesTitle}` : seriesTitle),
+        year: movie.year || meta.release_year || '2024',
+        rating: movie.rating && movie.rating !== 'N/A' ? movie.rating : '8.5',
+        status: meta.series_status || 'مستمر',
+        quality: movie.quality || '1080p Full HD',
+        genres: movie.genres && movie.genres.length > 0 ? movie.genres : ['دراما', 'إثارة'],
+        posterUrl: movie.posterUrl,
+        backdropUrl: meta.backdrop_url || movie.posterUrl,
+        synopsis: movie.synopsis || `مشاهدة وتحميل جميع مواسم وحلقات مسلسل ${seriesTitle} مترجم كامل بجودة عالية 1080p FHD على منصة EgyMax.`,
+        cast: movie.cast || [],
+        seasonsMap: new Map(),
+      });
+    }
+
+    const show = seriesMap.get(seriesSlug);
+
+    // Resolve or initialize the season in seasonsMap
+    if (!show.seasonsMap.has(seasonNumber)) {
+      show.seasonsMap.set(seasonNumber, {
+        seasonNumber,
+        title: `الموسم ${seasonNumber}`,
+        episodes: [],
+      });
+    }
+
+    const seasonObj = show.seasonsMap.get(seasonNumber);
+    // Add episode if not already present
+    if (!seasonObj.episodes.some((e) => e.episodeNumber === episodeNumber)) {
+      seasonObj.episodes.push({
+        id: `ep-${post.id || `${seriesSlug}-s${seasonNumber}e${episodeNumber}`}`,
+        episodeNumber,
+        title: `الحلقة ${episodeNumber}`,
+        duration: meta.duration || '45 دقيقة',
+        servers: movie.servers || [],
+        primaryEmbed: movie.primaryEmbed || movie.embedUrl,
+        vidmolyEmbed: movie.vidmolyEmbed,
+        streamhgEmbed: movie.streamhgEmbed,
+        hgcloudEmbed: movie.streamhgEmbed,
+        doodEmbed: movie.doodEmbed,
+        streamtapeEmbed: movie.streamtapeEmbed,
+        embedUrl: movie.embedUrl || movie.primaryEmbed || movie.vidmolyEmbed || movie.doodEmbed,
+        download1080_dood: movie.download1080_dood,
+        download720: movie.download720,
+        synopsis: movie.synopsis,
+      });
+    }
+  }
+
+  // Convert each show's seasonsMap into sorted arrays and calculate totals
+  return Array.from(seriesMap.values()).map((show) => {
+    const seasons = Array.from(show.seasonsMap.values())
+      .map((s) => {
+        s.episodes.sort((a, b) => a.episodeNumber - b.episodeNumber);
+        return s;
+      })
+      .sort((a, b) => a.seasonNumber - b.seasonNumber);
+
+    const totalEpisodes = seasons.reduce((acc, s) => acc + s.episodes.length, 0);
+
+    return {
+      ...show,
+      seasonsCount: seasons.length || 1,
+      episodesCount: totalEpisodes || 1,
+      seasons: seasons.length > 0 ? seasons : [
+        {
+          seasonNumber: 1,
+          title: 'الموسم الأول',
+          episodes: [
+            {
+              episodeNumber: 1,
+              title: 'الحلقة 1',
+              duration: '45 دقيقة',
+              servers: [],
+              embedUrl: null,
+            },
+          ],
+        },
+      ],
+    };
+  });
+}
+
+/**
+ * Fetch series list with optional search and category filters.
+ * Returns unique TV Show entities (never individual episodes).
  */
 export async function getSeriesList({ search = '', category = null } = {}) {
   let list = [...CURATED_SERIES];
 
-  // Also query WordPress for any posts containing "مسلسل" or "series"
+  // Also query WordPress for any posts related to series/episodes
   try {
-    const wpPosts = await searchMovies({ search: search ? `${search} مسلسل` : 'مسلسل', perPage: 12 });
-    if (Array.isArray(wpPosts) && wpPosts.length > 0) {
-      const dynamicSeries = wpPosts.map(post => {
-        const movie = parseMovieData(post);
-        return {
-          id: `wp-${movie.id}`,
-          slug: movie.slug,
-          title: movie.title,
-          titleAr: movie.titleAr || movie.title,
-          year: movie.year,
-          rating: movie.rating,
-          status: 'مستمر',
-          quality: movie.quality,
-          genres: movie.genres.length > 0 ? movie.genres : ['دراما'],
-          seasonsCount: 1,
-          episodesCount: 1,
-          posterUrl: movie.posterUrl,
-          backdropUrl: movie.posterUrl,
-          synopsis: movie.synopsis,
-          cast: movie.cast,
-          seasons: [
-            {
-              seasonNumber: 1,
-              title: 'الموسم الأول',
-              episodes: [
-                {
-                  episodeNumber: 1,
-                  title: 'الحلقة 1',
-                  duration: '45 دقيقة',
-                  servers: movie.servers,
-                  primaryEmbed: movie.primaryEmbed,
-                  vidmolyEmbed: movie.vidmolyEmbed,
-                  streamhgEmbed: movie.streamhgEmbed,
-                  hgcloudEmbed: movie.streamhgEmbed,
-                  doodEmbed: movie.doodEmbed,
-                  streamtapeEmbed: movie.streamtapeEmbed,
-                  embedUrl: movie.embedUrl,
-                  synopsis: movie.synopsis
-                }
-              ]
-            }
-          ]
-        };
-      });
+    const wpPosts = await searchMovies({
+      search: search ? `${search} مسلسل` : 'مسلسل',
+      perPage: 50,
+    });
 
-      // Avoid duplicates
+    if (Array.isArray(wpPosts) && wpPosts.length > 0) {
+      // Group episode posts into unified TV show objects
+      const dynamicSeries = groupPostsIntoSeries(wpPosts);
+
+      // Merge dynamic series with curated series
       for (const ds of dynamicSeries) {
-        if (!list.some(s => s.slug === ds.slug)) {
-          list.unshift(ds);
+        const existingIdx = list.findIndex(
+          (s) => s.slug === ds.slug || s.title.toLowerCase() === ds.title.toLowerCase()
+        );
+        if (existingIdx !== -1) {
+          // Merge dynamic episodes into curated series if missing
+          const existing = list[existingIdx];
+          for (const dSeason of ds.seasons) {
+            let targetSeason = existing.seasons.find((s) => s.seasonNumber === dSeason.seasonNumber);
+            if (!targetSeason) {
+              existing.seasons.push(dSeason);
+            } else {
+              for (const dEp of dSeason.episodes) {
+                if (!targetSeason.episodes.some((e) => e.episodeNumber === dEp.episodeNumber)) {
+                  targetSeason.episodes.push(dEp);
+                }
+              }
+            }
+          }
+          // Recalculate counts
+          existing.seasons.sort((a, b) => a.seasonNumber - b.seasonNumber);
+          existing.seasonsCount = existing.seasons.length;
+          existing.episodesCount = existing.seasons.reduce((acc, s) => acc + s.episodes.length, 0);
+        } else {
+          list.push(ds);
         }
       }
     }
@@ -1147,7 +1297,7 @@ export async function getSeriesList({ search = '', category = null } = {}) {
   // Filter by search query
   if (search && search.trim()) {
     const q = search.trim().toLowerCase();
-    list = list.filter(s => 
+    list = list.filter((s) =>
       s.title.toLowerCase().includes(q) ||
       (s.titleAr && s.titleAr.includes(q)) ||
       (s.synopsis && s.synopsis.includes(q))
@@ -1157,8 +1307,8 @@ export async function getSeriesList({ search = '', category = null } = {}) {
   // Filter by genre/category
   if (category && category.trim()) {
     const cat = category.trim();
-    list = list.filter(s => 
-      s.genres.some(g => g.toLowerCase() === cat.toLowerCase() || g === cat)
+    list = list.filter((s) =>
+      s.genres.some((g) => g.toLowerCase() === cat.toLowerCase() || g === cat)
     );
   }
 
@@ -1166,59 +1316,74 @@ export async function getSeriesList({ search = '', category = null } = {}) {
 }
 
 /**
- * Fetch a single series by slug with complete seasons and episodes
+ * Fetch a single series by slug with complete seasons and episodes.
  */
 export async function getSeriesBySlug(slug) {
   if (!slug) return null;
 
   // 1. Search in curated list
-  const found = CURATED_SERIES.find(s => s.slug === slug);
-  if (found) return found;
-
-  // 2. Search in WordPress
-  try {
-    const post = await getMovieBySlug(slug);
-    if (post) {
-      const movie = parseMovieData(post);
-      return {
-        id: `wp-${movie.id}`,
-        slug: movie.slug,
-        title: movie.title,
-        titleAr: movie.titleAr || movie.title,
-        year: movie.year,
-        rating: movie.rating,
-        status: 'مستمر',
-        quality: movie.quality,
-        genres: movie.genres.length > 0 ? movie.genres : ['دراما'],
-        seasonsCount: 1,
-        episodesCount: 1,
-        posterUrl: movie.posterUrl,
-        backdropUrl: movie.posterUrl,
-        synopsis: movie.synopsis,
-        cast: movie.cast,
-        seasons: [
-          {
-            seasonNumber: 1,
-            title: 'الموسم الأول',
-            episodes: [
-              {
-                episodeNumber: 1,
-                title: 'الحلقة 1',
-                duration: '45 دقيقة',
-                servers: movie.servers,
-                primaryEmbed: movie.primaryEmbed,
-                vidmolyEmbed: movie.vidmolyEmbed,
-                streamhgEmbed: movie.streamhgEmbed,
-                hgcloudEmbed: movie.streamhgEmbed,
-                doodEmbed: movie.doodEmbed,
-                streamtapeEmbed: movie.streamtapeEmbed,
-                embedUrl: movie.embedUrl,
-                synopsis: movie.synopsis
+  const found = CURATED_SERIES.find((s) => s.slug === slug);
+  if (found) {
+    // Enrich with any dynamic episodes from WordPress if available
+    try {
+      const cleanSearch = found.title || slug.replace(/-/g, ' ');
+      const relatedPosts = await searchMovies({ search: cleanSearch, perPage: 25 });
+      if (Array.isArray(relatedPosts) && relatedPosts.length > 0) {
+        const dynamicGrouped = groupPostsIntoSeries(relatedPosts);
+        const dynamicMatch = dynamicGrouped.find(
+          (d) => d.slug === slug || d.title.toLowerCase() === found.title.toLowerCase()
+        );
+        if (dynamicMatch) {
+          const mergedSeasons = [...found.seasons];
+          for (const dSeason of dynamicMatch.seasons) {
+            let targetSeason = mergedSeasons.find((s) => s.seasonNumber === dSeason.seasonNumber);
+            if (!targetSeason) {
+              mergedSeasons.push(dSeason);
+            } else {
+              for (const dEp of dSeason.episodes) {
+                if (!targetSeason.episodes.some((e) => e.episodeNumber === dEp.episodeNumber)) {
+                  targetSeason.episodes.push(dEp);
+                }
               }
-            ]
+            }
           }
-        ]
-      };
+          mergedSeasons.sort((a, b) => a.seasonNumber - b.seasonNumber);
+          return {
+            ...found,
+            seasons: mergedSeasons,
+            seasonsCount: mergedSeasons.length,
+            episodesCount: mergedSeasons.reduce((acc, s) => acc + s.episodes.length, 0),
+          };
+        }
+      }
+    } catch (_) {}
+    return found;
+  }
+
+  // 2. Search in WordPress by slug or clean series name
+  try {
+    const searchTerms = [slug.replace(/-/g, ' '), slug];
+    let candidatePosts = [];
+
+    // Try direct post by slug
+    const directPost = await getMovieBySlug(slug);
+    if (directPost) {
+      candidatePosts.push(directPost);
+    }
+
+    // Also search for all episodes belonging to this show
+    const relatedPosts = await searchMovies({ search: searchTerms[0], perPage: 50 });
+    if (Array.isArray(relatedPosts)) {
+      candidatePosts.push(...relatedPosts);
+    }
+
+    if (candidatePosts.length > 0) {
+      const grouped = groupPostsIntoSeries(candidatePosts);
+      // Find the best match
+      const matched =
+        grouped.find((s) => s.slug === slug || slug.startsWith(s.slug) || s.slug.startsWith(slug)) ||
+        grouped[0];
+      if (matched) return matched;
     }
   } catch (err) {
     console.warn('[Series API] WP getSeriesBySlug notice:', err.message);

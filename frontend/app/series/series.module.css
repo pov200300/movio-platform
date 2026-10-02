@@ -232,6 +232,21 @@
   font-weight: 800;
 }
 
+.genreTagsMini {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin-top: 0.35rem;
+}
+
+.miniGenre {
+  font-size: 0.7rem;
+  background: rgba(255, 255, 255, 0.06);
+  color: #94a3b8;
+  padding: 2px 7px;
+  border-radius: var(--radius-sm);
+}
+
 .emptyState {
   background: var(--bg-surface);
   border: 1px dashed var(--glass-border);

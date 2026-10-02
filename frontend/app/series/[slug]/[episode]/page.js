@@ -133,7 +133,15 @@ export default async function SeriesEpisodePage({ params }) {
         </nav>
 
         {/* Hero Card / Metadata Overview */}
-        <section className={styles.heroCard}>
+        <section
+          className={styles.heroCard}
+          style={(series.backdropUrl || series.posterUrl) ? {
+            backgroundImage: `linear-gradient(to top, #0a0b10 15%, rgba(10, 11, 16, 0.88) 65%, rgba(10, 11, 16, 0.45) 100%), url(${series.backdropUrl || series.posterUrl})`,
+            backgroundPosition: 'center 20%',
+            backgroundSize: 'cover',
+            backgroundRepeat: 'no-repeat',
+          } : undefined}
+        >
           <div className={styles.posterCol}>
             <div className={styles.posterWrapper}>
               <Image

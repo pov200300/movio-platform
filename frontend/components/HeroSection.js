@@ -3,13 +3,13 @@ import Image from 'next/image';
 import styles from './HeroSection.module.css';
 
 export default function HeroSection({ featuredMovie }) {
-  // Extract high-res backdrop if available from featured movie
-  let backdropUrl = featuredMovie?.meta?.backdrop_url;
+  // Extract high-res backdrop if available from featured movie or series
+  let backdropUrl = featuredMovie?.meta?.backdrop_url || featuredMovie?.backdropUrl || featuredMovie?.backdrop_url;
   if (!backdropUrl && featuredMovie?._embedded && featuredMovie._embedded['wp:featuredmedia']?.[0]?.source_url) {
     backdropUrl = featuredMovie._embedded['wp:featuredmedia'][0].source_url;
   }
-  if (!backdropUrl && featuredMovie?.posterUrl) {
-    backdropUrl = featuredMovie.posterUrl;
+  if (!backdropUrl && (featuredMovie?.posterUrl || featuredMovie?.poster_url)) {
+    backdropUrl = featuredMovie.posterUrl || featuredMovie.poster_url;
   }
 
   const featuredTitle = (
@@ -21,7 +21,12 @@ export default function HeroSection({ featuredMovie }) {
   ).replace(/<[^>]+>/g, '').trim();
 
   return (
-    <div className={styles.heroBanner}>
+    <div
+      className={styles.heroBanner}
+      style={backdropUrl ? {
+        background: `linear-gradient(to top, #0a0b10 10%, rgba(10, 11, 16, 0.7) 60%, rgba(10, 11, 16, 0.3) 100%), url(${backdropUrl}) center/cover no-repeat`
+      } : undefined}
+    >
       {/* Background Image with Rich Multi-Stop Vignette */}
       <div className={styles.backdropWrapper}>
         {backdropUrl && (
@@ -43,7 +48,7 @@ export default function HeroSection({ featuredMovie }) {
         {/* Top Badges */}
         <div className={styles.badgeRow}>
           <span className={styles.badgeFire}>🔥 المنصة الأولى</span>
-          <span className={styles.badgeQuality}>4K ULTRA HD</span>
+          <span className={styles.badgeQuality}>1080p Full HD</span>
           <span className={styles.badgeSub}>مترجم بالكامل</span>
         </div>
 

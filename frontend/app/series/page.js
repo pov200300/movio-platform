@@ -144,6 +144,13 @@ export default async function SeriesCatalogPage({ searchParams }) {
                 <div className={styles.cardBody}>
                   <h3 className={styles.seriesTitle}>{item.title}</h3>
                   {item.titleAr && <h4 className={styles.seriesTitleAr}>{item.titleAr}</h4>}
+                  {item.genres && item.genres.length > 0 && (
+                    <div className={styles.genreTagsMini}>
+                      {item.genres.slice(0, 2).map((g, idx) => (
+                        <span key={idx} className={styles.miniGenre}>{g}</span>
+                      ))}
+                    </div>
+                  )}
                   <div className={styles.metaDetails}>
                     <span>{item.year}</span>
                     <span className={styles.seasonsTag}>
