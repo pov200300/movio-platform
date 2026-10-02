@@ -71,7 +71,7 @@ export default function VideoPlayer({
         .map((s, idx) => {
           let normUrl = normalizeStreamHgUrl(s.url);
           if (s.id === 'vidmoly' || (s.name && s.name.toLowerCase().includes('vidmoly')) || normUrl.includes('vidmoly')) {
-            normUrl = formatVidmolyEmbed(normUrl, 'vidmoly.to');
+            normUrl = formatVidmolyEmbed(normUrl, 'vidmoly.biz');
           }
           return {
             id: s.id || `server-${idx + 1}`,
@@ -99,7 +99,7 @@ export default function VideoPlayer({
           id: 'vidmoly',
           name: 'Vidmoly (1080p)',
           label: PROVIDER_LABELS.vidmoly,
-          url: formatVidmolyEmbed(vUrl, 'vidmoly.to'),
+          url: formatVidmolyEmbed(vUrl, 'vidmoly.biz'),
           fast: true,
         });
       }
@@ -169,7 +169,7 @@ export default function VideoPlayer({
   // Active Server ID: default to first available server in priority order
   const [activeServerId, setActiveServerId] = useState(() => resolvedServers[0]?.id || 'default');
 
-  // Mirror fallback state for Vidmoly (toggles between vidmoly.to and vidmoly.biz)
+  // Mirror fallback state for Vidmoly (toggles between vidmoly.biz and vidmoly.to)
   const [useVidmolyMirror, setUseVidmolyMirror] = useState(false);
 
   // Synchronize active server if servers list changes (e.g. episode switch)
@@ -179,7 +179,7 @@ export default function VideoPlayer({
     }
   }, [resolvedServers, activeServerId]);
 
-  // Ensure vidmoly.to is ALWAYS the immediate default domain upon first load or server/episode switch
+  // Ensure vidmoly.biz is ALWAYS the immediate default domain upon first load or server/episode switch
   useEffect(() => {
     setUseVidmolyMirror(false);
   }, [activeServerId, slug]);
@@ -189,11 +189,11 @@ export default function VideoPlayer({
   const rawActiveUrl = activeServer?.url || null;
   const isVidmoly = activeServer?.id === 'vidmoly' || (rawActiveUrl && rawActiveUrl.includes('vidmoly'));
 
-  // Formatted server embed URL with safe mirror switching (vidmoly.to <-> vidmoly.biz)
+  // Formatted server embed URL with safe mirror switching (vidmoly.biz <-> vidmoly.to)
   const formattedServerUrl = useMemo(() => {
     if (!rawActiveUrl) return null;
     if (isVidmoly) {
-      const targetDomain = useVidmolyMirror ? 'vidmoly.biz' : 'vidmoly.to';
+      const targetDomain = useVidmolyMirror ? 'vidmoly.to' : 'vidmoly.biz';
       return formatVidmolyEmbed(rawActiveUrl, targetDomain);
     }
     return rawActiveUrl;
@@ -347,16 +347,16 @@ export default function VideoPlayer({
               </button>
             )}
 
-            {/* Vidmoly Mirror Domain Switcher (vidmoly.to <-> vidmoly.biz) */}
+            {/* Vidmoly Mirror Domain Switcher (vidmoly.biz <-> vidmoly.to) */}
             {isVidmoly && (
               <button
                 type="button"
                 onClick={() => setUseVidmolyMirror((prev) => !prev)}
                 className={`${styles.serverTab} ${useVidmolyMirror ? styles.activeTab : ''}`}
                 style={{ borderColor: 'rgba(56, 189, 248, 0.4)', color: '#38bdf8' }}
-                title="التبديل بين نطاق vidmoly.to ونطاق vidmoly.biz الاحتياطي في حال حجب أحدهما"
+                title="التبديل بين نطاق vidmoly.biz الأساسي ونطاق vidmoly.to الاحتياطي في حال حجب أحدهما"
               >
-                <span>🔄 مرآة بديلة: {useVidmolyMirror ? 'vidmoly.to' : 'vidmoly.biz'}</span>
+                <span>🔄 مرآة بديلة: {useVidmolyMirror ? 'vidmoly.biz' : 'vidmoly.to'}</span>
               </button>
             )}
 

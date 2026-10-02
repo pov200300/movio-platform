@@ -124,10 +124,10 @@ export function normalizeStreamHgUrl(url) {
  * Safely extracts the alphanumeric file code and prevents /embed-embed.html corruption.
  *
  * @param {string} url - Raw Vidmoly URL or file code
- * @param {string} targetDomain - Target mirror domain (default: 'vidmoly.to')
+ * @param {string} targetDomain - Target mirror domain (default: 'vidmoly.biz')
  * @returns {string} Formatted Vidmoly embed URL
  */
-export function formatVidmolyEmbed(url, targetDomain = "vidmoly.to") {
+export function formatVidmolyEmbed(url, targetDomain = "vidmoly.biz") {
   if (!url || typeof url !== 'string') return "";
   const cleanUrl = url.trim();
 
@@ -157,16 +157,16 @@ export function formatVidmolyEmbed(url, targetDomain = "vidmoly.to") {
 }
 
 /**
- * Normalizes any Vidmoly embed URL to valid embed format: https://vidmoly.to/embed-{code}.html
+ * Normalizes any Vidmoly embed URL to valid embed format: https://vidmoly.biz/embed-{code}.html
  * (or preferred mirror domain). Delegates to robust formatVidmolyEmbed.
  */
-export function normalizeVidmolyUrl(url, preferredMirror = "vidmoly.to") {
+export function normalizeVidmolyUrl(url, preferredMirror = "vidmoly.biz") {
   if (!url || typeof url !== 'string') return url;
-  return formatVidmolyEmbed(url, preferredMirror || "vidmoly.to");
+  return formatVidmolyEmbed(url, preferredMirror || "vidmoly.biz");
 }
 
 /**
- * Switch Vidmoly URL between primary domain (vidmoly.to) and mirror domain (vidmoly.biz)
+ * Switch Vidmoly URL between primary domain (vidmoly.biz) and mirror domain (vidmoly.to)
  * Preserves the extracted fileCode and prevents URL corruption.
  */
 export function getVidmolyMirrorUrl(url, targetDomain = null) {
@@ -174,15 +174,15 @@ export function getVidmolyMirrorUrl(url, targetDomain = null) {
   if (targetDomain) {
     return formatVidmolyEmbed(url, targetDomain);
   }
-  // Toggle between vidmoly.to and vidmoly.biz (or legacy vidmoly.me)
+  // Toggle between vidmoly.biz and vidmoly.to (or legacy vidmoly.me)
   if (url.includes('vidmoly.biz')) {
     return formatVidmolyEmbed(url, 'vidmoly.to');
   } else if (url.includes('vidmoly.to')) {
     return formatVidmolyEmbed(url, 'vidmoly.biz');
   } else if (url.includes('vidmoly.me')) {
-    return formatVidmolyEmbed(url, 'vidmoly.to');
+    return formatVidmolyEmbed(url, 'vidmoly.biz');
   }
-  return formatVidmolyEmbed(url, 'vidmoly.biz');
+  return formatVidmolyEmbed(url, 'vidmoly.to');
 }
 
 /**
@@ -210,12 +210,12 @@ export function getVidmolyFileCode(url) {
 
 /**
  * Returns clean direct stream/view URL for Vidmoly (1080p FHD):
- * https://vidmoly.to/v/{fileCode}
+ * https://vidmoly.biz/v/{fileCode}
  * Uses /v/ to avoid MENA geo-restrictions encountered on /dl/.
  */
 export function getVidmolyDownloadUrl(url) {
   const code = getVidmolyFileCode(url);
-  return code ? `https://vidmoly.to/v/${code}` : null;
+  return code ? `https://vidmoly.biz/v/${code}` : null;
 }
 
 /**
