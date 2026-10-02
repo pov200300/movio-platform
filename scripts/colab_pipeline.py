@@ -693,7 +693,16 @@ def matches_show_tokens(show_name: str, title: str, season_num: int = None, epis
         clean_after = re.sub(r"[\s\._\-]+", " ", after_show)
         ep_pattern = rf"\b(?:s0*{season_num}\s*e0*{episode_num}|0*{season_num}\s*x\s*0*{episode_num})\b"
         if not re.search(ep_pattern, clean_after, re.IGNORECASE):
-            return False
+            # Check if this release explicitly specifies a different episode
+            other_ep = re.search(r'\b(?:s0*\d+\s*e0*(\d+)|0*\d+\s*x\s*0*(\d+))\b', clean_after, re.IGNORECASE)
+            if other_ep:
+                matched_ep = int(other_ep.group(1) or other_ep.group(2))
+                if matched_ep != episode_num:
+                    return False
+            # Allow complete season packs (e.g. "S01 Complete", "Season 1", "S01-S05")
+            season_pack_pattern = rf"\b(?:season\s*0*{season_num}\b|s0*{season_num}\b|s0*{season_num}\s*-\s*s0*\d+)\b"
+            if not re.search(season_pack_pattern, clean_after, re.IGNORECASE):
+                return False
 
     return True
 
@@ -711,6 +720,78 @@ def is_excluded_release(text: str) -> bool:
     if re.search(r'\b(hdtv|pdtv|dsr|tvrip|hdtvrip)\b', t) and not re.search(r'\b(bluray|bdrip|brrip|bdr|web dl|webdl|webrip)\b', t):
         return True
     return False
+
+def search_1337x_tv(show_name: str, season_num: int, episode_num: int, trackers_query: str = "") -> list:
+    """
+    Search 1337x across active mirrors for high-seed TV episode releases or season packs.
+    """
+    episode_tag = f"S{season_num:02d}E{episode_num:02d}"
+    mirrors = ["https://1337xx.to", "https://1337x.so", "https://1337x.to"]
+    queries = [f"{show_name} {episode_tag}", f"{show_name} S{season_num:02d}"]
+    results = []
+
+    for mirror in mirrors:
+        for query in queries:
+            try:
+                url = f"{mirror}/category-search/{quote(query)}/TV/1/"
+                r = requests.get(url, headers=HEADERS, timeout=8)
+                if r.status_code != 200:
+                    continue
+                soup = BeautifulSoup(r.text, 'html.parser')
+                rows = soup.select('table.table-list tr')
+                if not rows or len(rows) < 2:
+                    continue
+
+                for row in rows[1:15]:
+                    cols = row.select('td')
+                    if len(cols) < 2:
+                        continue
+                    name_links = cols[0].select('a')
+                    if not name_links:
+                        continue
+                    name_a = name_links[1] if len(name_links) > 1 else name_links[0]
+                    title = name_a.text.strip()
+                    detail_href = name_a.get('href', '')
+
+                    if is_excluded_release(title):
+                        continue
+                    if not matches_show_tokens(show_name, title, season_num, episode_num):
+                        continue
+
+                    seeds_td = row.select_one('td.seeds')
+                    seeds = int(seeds_td.text.strip()) if (seeds_td and seeds_td.text.strip().isdigit()) else 0
+                    if seeds < 5:
+                        continue
+
+                    try:
+                        det_url = f"{mirror}{detail_href}" if detail_href.startswith('/') else detail_href
+                        det_res = requests.get(det_url, headers=HEADERS, timeout=6)
+                        if det_res.status_code == 200:
+                            det_soup = BeautifulSoup(det_res.text, 'html.parser')
+                            magnet_a = det_soup.find('a', href=lambda h: h and h.startswith('magnet:'))
+                            if magnet_a:
+                                mag = magnet_a['href']
+                                if trackers_query and "tr=" not in mag:
+                                    mag += trackers_query
+                                results.append({
+                                    "title": title,
+                                    "torrent_url": None,
+                                    "magnet_uri": mag,
+                                    "seeds": seeds,
+                                    "size_bytes": 0,
+                                    "source": "1337x"
+                                })
+                                if len(results) >= 5:
+                                    break
+                    except Exception:
+                        continue
+                if results:
+                    break
+            except Exception:
+                continue
+        if results:
+            break
+    return results
 
 def fetch_tv_torrent(show_name: str, season_num: int, episode_num: int, imdb_id: str = None, preferred_quality: str = "1080p") -> dict:
     """
@@ -738,38 +819,41 @@ def fetch_tv_torrent(show_name: str, season_num: int, episode_num: int, imdb_id:
     trackers_query = "".join(f"&tr={quote(tr)}" for tr in trackers_list)
 
     # 1. Primary Indexer: APIBay (The Pirate Bay API - open, no Cloudflare, Google Colab friendly)
-    try:
-        apibay_query = f"{show_name} {episode_tag}"
-        apibay_url = f"https://apibay.org/q.php?q={quote_plus(apibay_query)}"
-        r = requests.get(apibay_url, headers=HEADERS, timeout=8)
-        if r.status_code == 200:
-            items = r.json()
-            if isinstance(items, list):
-                for item in items:
-                    name = item.get("name", "")
-                    info_hash = item.get("info_hash", "")
-                    if not info_hash or info_hash == "0000000000000000000000000000000000000000" or name == "No results returned":
-                        continue
-                    if is_excluded_release(name):
-                        continue
-                    if not matches_show_tokens(show_name, name, season_num, episode_num):
-                        continue
-                    seeds = int(item.get("seeders") or 0)
-                    if seeds <= 0:
-                        continue
-                    magnet = f"magnet:?xt=urn:btih:{info_hash}&dn={quote(name)}{trackers_query}"
-                    matched_torrents.append({
-                        "title": name,
-                        "torrent_url": None,
-                        "magnet_uri": magnet,
-                        "seeds": seeds,
-                        "size_bytes": int(item.get("size") or 0),
-                        "source": "APIBay"
-                    })
-                if matched_torrents:
-                    log("TV", f"APIBay resolved {len(matched_torrents)} active releases with seeds > 0 for {episode_tag}")
-    except Exception as e:
-        log("TV", f"APIBay query notice: {e}")
+    apibay_queries = [f"{show_name} {episode_tag}", f"{show_name} S{season_num:02d}"]
+    for apibay_query in apibay_queries:
+        try:
+            apibay_url = f"https://apibay.org/q.php?q={quote_plus(apibay_query)}"
+            r = requests.get(apibay_url, headers=HEADERS, timeout=8)
+            if r.status_code == 200:
+                items = r.json()
+                if isinstance(items, list):
+                    added_ab = 0
+                    for item in items:
+                        name = item.get("name", "")
+                        info_hash = item.get("info_hash", "")
+                        if not info_hash or info_hash == "0000000000000000000000000000000000000000" or name == "No results returned":
+                            continue
+                        if is_excluded_release(name):
+                            continue
+                        if not matches_show_tokens(show_name, name, season_num, episode_num):
+                            continue
+                        seeds = int(item.get("seeders") or 0)
+                        if seeds < 3:
+                            continue
+                        magnet = f"magnet:?xt=urn:btih:{info_hash}&dn={quote(name)}{trackers_query}"
+                        matched_torrents.append({
+                            "title": name,
+                            "torrent_url": None,
+                            "magnet_uri": magnet,
+                            "seeds": seeds,
+                            "size_bytes": int(item.get("size") or 0),
+                            "source": "APIBay"
+                        })
+                        added_ab += 1
+                    if added_ab:
+                        log("TV", f"APIBay query '{apibay_query}' resolved {added_ab} active releases for {episode_tag}")
+        except Exception as e:
+            log("TV", f"APIBay query notice ({apibay_query}): {e}")
 
     # 2. Secondary Indexer: EZTV API across active mirrors (always queried to merge swarms)
     apibay_count = len(matched_torrents)
@@ -909,10 +993,51 @@ def fetch_tv_torrent(show_name: str, season_num: int, episode_num: int, imdb_id:
         except Exception as e:
             log("TV", f"Torrentio query notice: {e}")
 
-    # Filter out releases where seeds <= 0
-    valid_torrents = [t for t in matched_torrents if t.get("seeds", 0) > 0]
-    if not valid_torrents:
-        raise RuntimeError(f"No active torrents with seeders > 0 found for TV episode '{show_name} {episode_tag}'. Swarms are inactive across APIBay, EZTV, and indexers.")
+    # 4. Tertiary Fallback Indexer: 1337x (queried if swarm pool has < 5 candidates or Torrentio failed)
+    if len(matched_torrents) < 5:
+        try:
+            x_results = search_1337x_tv(show_name, season_num, episode_num, trackers_query)
+            if x_results:
+                existing_hashes = set()
+                for t in matched_torrents:
+                    m_uri = t.get("magnet_uri") or ""
+                    h = re.search(r'btih:([a-fA-F0-9]+)', m_uri)
+                    if h:
+                        existing_hashes.add(h.group(1).lower())
+                added_x = 0
+                for xr in x_results:
+                    x_h = re.search(r'btih:([a-fA-F0-9]+)', xr.get("magnet_uri") or "")
+                    if x_h and x_h.group(1).lower() in existing_hashes:
+                        continue
+                    matched_torrents.append(xr)
+                    added_x += 1
+                if added_x:
+                    log("TV", f"1337x merged {added_x} verified releases ({len(x_results)} found) for {episode_tag}")
+        except Exception as e:
+            log("TV", f"1337x search notice: {e}")
+
+    # 5. Strict Minimum Seeders Filter (Hard filter seeds < 5, emergency fallback to seeds >= 3, strictly reject seeds < 3)
+    healthy_torrents = []
+    fallback_torrents = []
+    for t in matched_torrents:
+        s = int(t.get("seeds", 0) or 0)
+        t_title = t.get("title", "Unknown")
+        if s >= 5:
+            healthy_torrents.append(t)
+        elif s >= 3:
+            fallback_torrents.append(t)
+        else:
+            log("TV", f"⚠️ Filtered out candidate '{t_title}' due to low seeds ({s} < 5)")
+
+    if healthy_torrents:
+        valid_torrents = healthy_torrents
+        for ft in fallback_torrents:
+            log("TV", f"⚠️ Filtered out candidate '{ft.get('title')}' due to low seeds ({ft.get('seeds')} < 5)")
+    elif fallback_torrents:
+        log("TV", f"⚠️ No candidates with seeds >= 5 found. Falling back to {len(fallback_torrents)} candidates with seeds >= 3...")
+        valid_torrents = fallback_torrents
+    else:
+        raise RuntimeError(f"No active torrents with seeders >= 3 found for TV episode '{show_name} {episode_tag}'. Swarms are inactive across APIBay, EZTV, and indexers.")
 
     # Release Tier Hierarchy for Subtitle Synchronization:
     # 1. Tier 1 (Highest Priority): BluRay / BDRip releases (sorted by highest seeders among them).
@@ -949,6 +1074,9 @@ def fetch_tv_torrent(show_name: str, season_num: int, episode_num: int, imdb_id:
         # Within each tier, rank strictly by seeders count (capped at 20,000 so it can NEVER cross tiers)
         seed_score = min(float(seeds), 20000.0)
 
+        # Single episode bonus: +5000 so single episodes or season packs with file_idx are prioritized over full packs
+        ep_bonus = 5000.0 if (re.search(rf'\b(?:s0*{season_num}\s*e0*{episode_num}|0*{season_num}\s*x\s*0*{episode_num})\b', full_text) or t.get('file_idx')) else 0.0
+
         # Subtle modifiers within tier
         modifier = 0.0
         if re.search(r'\b(psa|galaxytv|tgx|qxr|rarbg|x264)\b', full_text):
@@ -958,7 +1086,7 @@ def fetch_tv_torrent(show_name: str, season_num: int, episode_num: int, imdb_id:
         if re.search(r'\b(av1)\b', full_text):
             modifier -= 1000.0
 
-        return base_score + seed_score + modifier
+        return base_score + seed_score + ep_bonus + modifier
 
     valid_torrents.sort(key=release_score, reverse=True)
 
@@ -1227,6 +1355,8 @@ def download_with_aria2(
     start_time = time.time()
     last_speed_mb = 0.0
     last_progress_pct = 0.0
+    max_downloaded_mb = 0.0
+    stall_start_time = None
     aborted_slow = False
     abort_msg = ""
 
@@ -1247,34 +1377,62 @@ def download_with_aria2(
                 s_match = re.search(r'DL:([0-9.]+[a-zA-Z]+(?:/s)?)', line_str)
                 if s_match:
                     last_speed_mb = parse_aria2_speed(s_match.group(1))
+                b_match = re.search(r'\[#[a-fA-F0-9]+\s+([0-9.]+[a-zA-Z]+)/', line_str)
+                if b_match:
+                    curr_mb = parse_aria2_speed(b_match.group(1))
+                    if curr_mb > max_downloaded_mb:
+                        max_downloaded_mb = curr_mb
 
         elapsed = time.time() - start_time
-        # Speed threshold health check: 60-90 seconds
-        if elapsed >= timeout_check_start:
-            is_slow = False
-            if elapsed >= timeout_check_start and last_progress_pct < min_progress_pct and last_speed_mb < min_speed_mb:
-                is_slow = True
-            elif elapsed >= timeout_check_limit and last_speed_mb < min_speed_mb:
-                is_slow = True
+        # Periodically check disk usage in download_dir to accurately track bytes written
+        if int(elapsed) % 5 == 0:
+            try:
+                disk_bytes = sum(os.path.getsize(os.path.join(r, f)) for r, _, fs in os.walk(download_dir) for f in fs)
+                disk_mb = disk_bytes / (1024.0 * 1024.0)
+                if disk_mb > max_downloaded_mb:
+                    max_downloaded_mb = disk_mb
+            except Exception:
+                pass
 
-            if is_slow:
-                aborted_slow = True
-                abort_msg = (
-                    f"Candidate is slow/dead (< {min_speed_mb:.1f} MB/s, progress: {last_progress_pct}%, "
-                    f"speed: {last_speed_mb:.2f} MB/s after {int(elapsed)}s)"
-                )
-                log("ARIA2", "⚠️ Candidate is slow/dead (< 1 MB/s). Skipping to next candidate...")
-                try:
-                    proc.terminate()
-                    proc.wait(timeout=3)
-                except Exception:
-                    try:
-                        proc.kill()
-                        proc.wait(timeout=2)
-                    except Exception:
-                        pass
-                sanitize_download_dir(download_dir, staging_dir)
-                raise RuntimeError(abort_msg)
+        # Progress-Aware Health Check: Do NOT kill in-progress downloads
+        # If progress >= 15% OR downloaded > 500 MB, allow generous 120s stall grace period for peers to unchoke
+        is_in_progress = (last_progress_pct >= 15.0 or max_downloaded_mb >= 500.0)
+
+        if is_in_progress:
+            if last_speed_mb < 0.05:
+                if stall_start_time is None:
+                    stall_start_time = time.time()
+                    log("ARIA2", f"⚠️ In-progress download paused/stalled (progress: {last_progress_pct}%, downloaded: {max_downloaded_mb:.1f} MB). Starting 120s unchoke grace period...")
+                stall_duration = time.time() - stall_start_time
+                if stall_duration >= 120.0:
+                    aborted_slow = True
+                    abort_msg = (
+                        f"In-progress download stalled at 0 MB/s for {int(stall_duration)}s "
+                        f"(progress: {last_progress_pct}%, downloaded: {max_downloaded_mb:.1f} MB)"
+                    )
+                    log("ARIA2", f"⚠️ In-progress download stalled (>120s at 0 MB/s). Terminating candidate...")
+                    break
+            else:
+                if stall_start_time is not None:
+                    log("ARIA2", f"✅ Peers unchoked! Download resumed at {last_speed_mb:.2f} MB/s (progress: {last_progress_pct}%).")
+                stall_start_time = None
+        else:
+            # Startup phase check: ONLY applies when progress < 5% and downloaded < 100MB
+            if elapsed >= timeout_check_start:
+                is_slow = False
+                if elapsed >= timeout_check_start and last_progress_pct < min_progress_pct and max_downloaded_mb < 100.0 and last_speed_mb < min_speed_mb:
+                    is_slow = True
+                elif elapsed >= timeout_check_limit and last_progress_pct < 15.0 and max_downloaded_mb < 500.0 and last_speed_mb < min_speed_mb:
+                    is_slow = True
+
+                if is_slow:
+                    aborted_slow = True
+                    abort_msg = (
+                        f"Candidate is slow/dead in startup phase (< {min_speed_mb:.1f} MB/s, "
+                        f"progress: {last_progress_pct}%, downloaded: {max_downloaded_mb:.1f} MB after {int(elapsed)}s)"
+                    )
+                    log("ARIA2", "⚠️ Candidate is slow/dead (< 1 MB/s in startup phase). Skipping to next candidate...")
+                    break
 
     # Drain any remaining lines
     while not out_q.empty():
@@ -1284,6 +1442,16 @@ def download_with_aria2(
             break
 
     if aborted_slow:
+        try:
+            proc.terminate()
+            proc.wait(timeout=3)
+        except Exception:
+            try:
+                proc.kill()
+                proc.wait(timeout=2)
+            except Exception:
+                pass
+        sanitize_download_dir(download_dir, staging_dir)
         raise RuntimeError(abort_msg)
 
     if proc.returncode != 0:
