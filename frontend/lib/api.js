@@ -53,11 +53,23 @@ export async function fetchAPI(endpoint, { method = 'GET', body = null } = {}) {
 }
 
 /**
- * Fetch latest movies (posts)
+ * Fetch latest movies (posts) strictly excluding TV series/episodes
  */
-export async function getLatestMovies(limit = 18) {
-  const posts = await fetchAPI(`posts?per_page=${limit}&_embed`);
-  return Array.isArray(posts) ? posts : [];
+export async function getLatestMovies(limit = 24) {
+  const posts = await fetchAPI('posts?per_page=50&_embed');
+  if (!Array.isArray(posts)) return [];
+  const moviesOnly = posts.filter((p) => !isSeriesPost(p));
+  return moviesOnly.slice(0, limit);
+}
+
+/**
+ * Fetch latest TV series posts strictly belonging to category 'series'
+ */
+export async function getLatestSeries(limit = 12) {
+  const posts = await fetchAPI('posts?per_page=50&_embed');
+  if (!Array.isArray(posts)) return [];
+  const seriesOnly = posts.filter((p) => isSeriesPost(p));
+  return seriesOnly.slice(0, limit);
 }
 
 /**
@@ -360,17 +372,65 @@ export function getDualQualityDownloadLinks(movie) {
 }
 
 /**
- * Extract featured image URL from an embedded WP post object or fallback
+ * Extract featured image URL from an embedded WP post object, post meta, or fallback
  */
 export function getFeaturedImage(post) {
   if (!post) return '/placeholder.jpg';
-  let img = '/placeholder.jpg';
+  const meta = { ...(post.meta_input || {}), ...(post.meta || {}) };
+  let img = null;
   if (post._embedded && post._embedded['wp:featuredmedia'] && post._embedded['wp:featuredmedia'][0]?.source_url) {
     img = post._embedded['wp:featuredmedia'][0].source_url;
+  } else if (meta.poster_url) {
+    img = meta.poster_url;
+  } else if (meta.backdrop_url) {
+    img = meta.backdrop_url;
   } else if (post.meta?.backdrop_url) {
     img = post.meta.backdrop_url;
   }
-  return enforceHttps(img);
+  return enforceHttps(img || '/placeholder.jpg');
+}
+
+/**
+ * Detect whether a WordPress post belongs to a TV series or episode.
+ * Inspects taxonomy terms, post meta, and title patterns.
+ */
+export function isSeriesPost(post) {
+  if (!post) return false;
+  const meta = { ...(post.meta_input || {}), ...(post.meta || {}) };
+
+  // 1. Explicit post type
+  if (meta.type === 'tv_episode' || meta.type === 'series') return true;
+  if (meta.type === 'movie') return false;
+
+  // 2. TV-specific metadata fields
+  if (meta.show_title || meta.episode_tag || meta.season_number || meta.episode_number) return true;
+
+  // 3. Embedded WordPress Category Taxonomy
+  if (post._embedded && post._embedded['wp:term'] && Array.isArray(post._embedded['wp:term'][0])) {
+    const terms = post._embedded['wp:term'][0];
+    const isSeriesTerm = terms.some((t) => {
+      const slug = (t.slug || '').toLowerCase();
+      const name = (t.name || '').toLowerCase();
+      return slug === 'series' || slug === 'tv-shows' || slug === 'tv-series' || name.includes('مسلسل');
+    });
+    if (isSeriesTerm) return true;
+
+    const isMovieTerm = terms.some((t) => {
+      const slug = (t.slug || '').toLowerCase();
+      const name = (t.name || '').toLowerCase();
+      return slug === 'movies' || name === 'أفلام' || name === 'افلام';
+    });
+    if (isMovieTerm) return false;
+  }
+
+  // 4. Fallback: Title or slug pattern matching (e.g. S01E01, Season 1, الحلقة 1)
+  const title = (post.title?.rendered || post.title || '').trim();
+  const slug = (post.slug || '').trim();
+  if (/\b[sS]\d+[eE]\d+\b/i.test(title) || /\b[sS]\d+[eE]\d+\b/i.test(slug)) return true;
+  if (/(?:الموسم|موسم|الحلقة|حلقة)\s*\d+/i.test(title)) return true;
+  if (/^مسلسل\s+/i.test(title)) return true;
+
+  return false;
 }
 
 /**
@@ -958,16 +1018,8 @@ export async function getSeriesList({ search = '', category = null } = {}) {
     });
 
     if (Array.isArray(wpPosts) && wpPosts.length > 0) {
-      // Filter out test/dummy series
-      const realPosts = wpPosts.filter((p) => {
-        const slug = (p.slug || '').toLowerCase();
-        return !slug.startsWith('breaking-bad');
-      });
-
-      if (realPosts.length > 0) {
-        const dynamicSeries = groupPostsIntoSeries(realPosts);
-        list.push(...dynamicSeries);
-      }
+      const dynamicSeries = groupPostsIntoSeries(wpPosts);
+      list.push(...dynamicSeries);
     }
   } catch (err) {
     console.warn('[Series API] WP series query notice:', err.message);
@@ -1021,17 +1073,11 @@ export async function getSeriesBySlug(slug) {
     }
 
     if (candidatePosts.length > 0) {
-      const realPosts = candidatePosts.filter((p) => {
-        const s = (p.slug || '').toLowerCase();
-        return !s.startsWith('breaking-bad');
-      });
-      if (realPosts.length > 0) {
-        const grouped = groupPostsIntoSeries(realPosts);
-        const matched =
-          grouped.find((s) => s.slug === slug || slug.startsWith(s.slug) || s.slug.startsWith(slug)) ||
-          grouped[0];
-        if (matched) return matched;
-      }
+      const grouped = groupPostsIntoSeries(candidatePosts);
+      const matched =
+        grouped.find((s) => s.slug === slug || slug.startsWith(s.slug) || s.slug.startsWith(slug)) ||
+        grouped[0];
+      if (matched) return matched;
     }
   } catch (err) {
     console.warn('[Series API] WP getSeriesBySlug notice:', err.message);

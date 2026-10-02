@@ -374,6 +374,10 @@ def get_movie_metadata(movie_title: str, release_year: str = None, imdb_id: str 
             poster_url = f"https://image.tmdb.org/t/p/original{poster_path}"
         if backdrop_path:
             backdrop_url = f"https://image.tmdb.org/t/p/original{backdrop_path}"
+        if not poster_url and backdrop_url:
+            poster_url = backdrop_url
+        if not backdrop_url and poster_url:
+            backdrop_url = poster_url
             
         tmdb_id = movie_item.get("id")
         if tmdb_id and api_key:
@@ -616,12 +620,21 @@ def fetch_tv_metadata(show_name: str, season_num: int = 1, episode_num: int = 1,
                 ep_r = requests.get(ep_url, headers=HEADERS, timeout=10).json()
                 if ep_r.get("overview"):
                     overview_ar = ep_r.get("overview")
-                if ep_r.get("still_path") and not backdrop_url:
-                    backdrop_url = f"https://image.tmdb.org/t/p/original{ep_r['still_path']}"
+                if ep_r.get("still_path"):
+                    still_url = f"https://image.tmdb.org/t/p/original{ep_r['still_path']}"
+                    if not backdrop_url:
+                        backdrop_url = still_url
+                    if not poster_url:
+                        poster_url = still_url
                 if ep_r.get("vote_average"):
                     rating = format_imdb_rating(ep_r.get("vote_average"))
             except Exception:
                 pass
+
+    if not poster_url and backdrop_url:
+        poster_url = backdrop_url
+    if not backdrop_url and poster_url:
+        backdrop_url = poster_url
 
     if not overview_ar and overview_en and overview_en != "No synopsis available.":
         overview_ar = translate_to_arabic(overview_en)
@@ -631,6 +644,8 @@ def fetch_tv_metadata(show_name: str, season_num: int = 1, episode_num: int = 1,
 
     if not poster_url:
         poster_url = "https://images.unsplash.com/photo-1522869635100-9f4c5e86aa37?w=1000&q=85"
+    if not backdrop_url:
+        backdrop_url = poster_url
 
     return {
         "is_episode": True,
@@ -2633,8 +2648,8 @@ def apply_ass_style(ass_text: str) -> str:
         return ""
 
     target_style = (
-        "Style: Default,Noto Sans Arabic,29,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,"
-        "0,0,0,0,100,100,0,0,1,0.8,0.4,2,20,20,10,1"
+        "Style: Default,Noto Sans Arabic,70,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,"
+        "1,0,0,0,100,100,0,0,1,4.0,1.5,2,35,35,52,1"
     )
 
     # 1. Update or inject PlayResX, PlayResY, ScaledBorderAndShadow under [Script Info]
@@ -2738,7 +2753,7 @@ def convert_srt_to_ass(
         "",
         "[V4+ Styles]",
         "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
-        "Style: Default,Noto Sans Arabic,29,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0.8,0.4,2,20,20,10,1",
+        "Style: Default,Noto Sans Arabic,70,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,4.0,1.5,2,35,35,52,1",
         "",
         "[Events]",
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
@@ -3059,7 +3074,7 @@ def burn_arabic_subtitles(video_path: str, srt_path: str, sub_offset_seconds: fl
         sub_filter_rel = f"subtitles='sub.ass':fontsdir='{fonts_dir_escaped}'"
     else:
         use_ass = False
-        sub_style = "FontName=Noto Sans Arabic,FontSize=29,Bold=0,Outline=0.8,Shadow=0.4,MarginV=10,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Alignment=2"
+        sub_style = "FontName=Noto Sans Arabic,FontSize=70,Bold=1,Outline=4.0,Shadow=1.5,MarginL=35,MarginR=35,MarginV=52,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BackColour=&H80000000,BorderStyle=1,Alignment=2"
         sub_filter_rel = f"subtitles='sub.srt':fontsdir='{fonts_dir_escaped}':force_style='{sub_style}'"
 
     # 4K Pre-scale Detection: If source is > 1080p (2160p/4K/UHD), prepend scale filter
@@ -3359,7 +3374,7 @@ def generate_60s_preview_sample(
         if preview_sub_file.endswith('.ass'):
             sub_filter = f"subtitles='{escaped_sub}':fontsdir='{fonts_dir_escaped}'"
         else:
-            sub_style = "FontName=Noto Sans Arabic,FontSize=29,Bold=0,Outline=0.8,Shadow=0.4,MarginV=10,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Alignment=2"
+            sub_style = "FontName=Noto Sans Arabic,FontSize=70,Bold=1,Outline=4.0,Shadow=1.5,MarginL=35,MarginR=35,MarginV=52,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BackColour=&H80000000,BorderStyle=1,Alignment=2"
             sub_filter = f"subtitles='{escaped_sub}':fontsdir='{fonts_dir_escaped}':force_style='{sub_style}'"
         burn_cmd.extend(["-vf", sub_filter])
     burn_cmd.extend([
@@ -4000,9 +4015,13 @@ GENRE_MAP = {
     "Thriller": ("إثارة", "thriller"),
     "War": ("حرب", "war"),
     "Western": ("غرب أمريكي", "western"),
+    "Movies": ("أفلام", "movies"),
+    "Movie": ("أفلام", "movies"),
+    "أفلام": ("أفلام", "movies"),
     "Series": ("مسلسلات", "series"),
-    "TV Show": ("مسلسلات", "tv-shows"),
-    "TV Series": ("مسلسلات", "tv-series")
+    "مسلسلات": ("مسلسلات", "series"),
+    "TV Show": ("مسلسلات", "series"),
+    "TV Series": ("مسلسلات", "series")
 }
 
 _WP_CATEGORIES_CACHE = {}
@@ -4041,15 +4060,16 @@ def get_or_create_category(genre_name: str, wp_site_url: str = WP_SITE_URL, auth
     for cat in existing_cats:
         c_name = cat.get("name", "").strip().lower()
         c_slug = cat.get("slug", "").strip().lower()
-        if c_name == ar_name.lower() or c_name == clean_genre.lower() or c_slug == en_slug.lower():
+        if c_name == ar_name.lower() or c_name == clean_genre.lower() or c_slug == en_slug.lower() or c_slug == clean_genre.lower():
             return cat["id"]
 
     # 2. Category not found: auto-create via POST /wp/v2/categories
     create_url = f"{wp_site_url}/wp-json/wp/v2/categories"
+    create_desc = "قسم الأفلام" if en_slug == "movies" else ("قسم المسلسلات" if en_slug == "series" else f"أفلام ومسلسلات تصنيف {ar_name}")
     create_payload = {
         "name": ar_name,
         "slug": en_slug,
-        "description": f"أفلام ومسلسلات تصنيف {ar_name}"
+        "description": create_desc
     }
     create_headers = {
         "Content-Type": "application/json",
@@ -4077,6 +4097,7 @@ def get_or_create_category(genre_name: str, wp_site_url: str = WP_SITE_URL, auth
 def resolve_movie_categories(genres_raw, wp_site_url: str = WP_SITE_URL, auth=None, is_episode: bool = False) -> list:
     """
     Resolve raw genre string or list into WordPress category IDs with on-the-fly category creation.
+    Strictly isolates Movies ('أفلام' / slug: 'movies') from TV Episodes ('مسلسلات' / slug: 'series').
     """
     if isinstance(genres_raw, str):
         raw_list = [g.strip() for g in genres_raw.split(",") if g.strip()]
@@ -4085,10 +4106,23 @@ def resolve_movie_categories(genres_raw, wp_site_url: str = WP_SITE_URL, auth=No
     else:
         raw_list = []
 
-    if is_episode and "Series" not in raw_list and "مسلسلات" not in raw_list:
-        raw_list.append("Series")
-
     category_ids = []
+
+    if is_episode:
+        # TV Episode: MUST assign category 'مسلسلات' (slug: series)
+        # Strictly exclude any movie categories
+        raw_list = [g for g in raw_list if str(g).lower() not in ("movies", "movie", "أفلام", "افلام", "film", "films")]
+        series_cid = get_or_create_category("Series", wp_site_url, auth)
+        if series_cid and series_cid not in category_ids:
+            category_ids.append(series_cid)
+    else:
+        # Movie: MUST assign category 'أفلام' (slug: movies)
+        # Strictly exclude any series categories
+        raw_list = [g for g in raw_list if str(g).lower() not in ("series", "tv show", "tv series", "مسلسلات", "مسلسل")]
+        movie_cid = get_or_create_category("Movies", wp_site_url, auth)
+        if movie_cid and movie_cid not in category_ids:
+            category_ids.append(movie_cid)
+
     for genre in raw_list:
         cid = get_or_create_category(genre, wp_site_url, auth)
         if cid and cid not in category_ids:
@@ -4170,7 +4204,11 @@ def publish_movie_to_pantheon(
         seo_intro_paragraph = meta.get("seo_description") or f"مشاهدة وتحميل فيلم {meta.get('title_ar', meta['title'])} ({meta['year']}) مترجم كامل بجودة 1080p BluRay عالية أون لاين."
         story_paragraph = meta.get("overview_ar") or meta.get("overview") or "تدور أحداث الفيلم في إطار مشوق ومثير مليء بالأحداث غير المتوقعة والمغامرات الشيقة."
 
-    media_id = upload_poster_to_pantheon(meta.get("poster_url"), clean_slug, wp_site_url, username, app_password)
+    poster_to_upload = meta.get("poster_url") or meta.get("backdrop_url")
+    media_id = upload_poster_to_pantheon(poster_to_upload, clean_slug, wp_site_url, username, app_password)
+    if not media_id and meta.get("backdrop_url") and meta.get("backdrop_url") != poster_to_upload:
+        log("WP", "⚠️ Primary poster upload failed; attempting fallback upload using backdrop_url...")
+        media_id = upload_poster_to_pantheon(meta.get("backdrop_url"), clean_slug, wp_site_url, username, app_password)
 
     # Format and preserve IMDb rating strictly as a decimal string (e.g. '8.5')
     imdb_rating = format_imdb_rating(meta.get("imdb_rating") or meta.get("rating"))
@@ -4236,7 +4274,8 @@ def publish_movie_to_pantheon(
         "embed_url_720p": streamhg_clean or streamtape_clean or (embed_url if "720" in quality else ""),
         "video_year": str(meta.get("year", "2026")),
         "quality": quality,
-        "backdrop_url": meta.get("backdrop_url") or "",
+        "poster_url": meta.get("poster_url") or meta.get("backdrop_url") or "",
+        "backdrop_url": meta.get("backdrop_url") or meta.get("poster_url") or "",
         "genres": meta.get("genres", ""),
         "overview_ar": meta.get("overview_ar", ""),
         "cast": ", ".join(meta.get("cast", [])) if isinstance(meta.get("cast"), list) else str(meta.get("cast", "")),

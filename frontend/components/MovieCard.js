@@ -1,22 +1,34 @@
 import Link from 'next/link';
 import Image from 'next/image';
 import styles from './MovieCard.module.css';
-import { parseMovieData } from '../lib/api';
+import { parseMovieData, isSeriesPost } from '../lib/api';
 
-export default function MovieCard({ post, quality }) {
+export default function MovieCard({ post, quality, href }) {
   const movie = parseMovieData(post);
   if (!movie) return null;
 
-  const movieTitle = (movie.cleanTitle || movie.title || movie.displayTitle || movie.rawTitle || 'الفيلم').trim();
+  const movieTitle = (movie.cleanTitle || movie.title || movie.displayTitle || movie.rawTitle || 'المحتوى').trim();
   const displayQuality = quality || movie.quality || '1080p';
+  const isSeries = post?.isSeries || isSeriesPost(post);
+
+  let cardHref = href;
+  if (!cardHref) {
+    if (isSeries) {
+      const meta = { ...(post?.meta_input || {}), ...(post?.meta || {}) };
+      const showSlug = meta.series_slug || meta.show_slug || (movie.slug ? movie.slug.replace(/-s\d+e\d+.*/i, '') : '');
+      cardHref = showSlug ? `/series/${showSlug}` : `/movie/${movie.slug}`;
+    } else {
+      cardHref = `/movie/${movie.slug}`;
+    }
+  }
 
   return (
-    <Link href={`/movie/${movie.slug}`} className={styles.cardLink}>
+    <Link href={cardHref} className={styles.cardLink}>
       <div className={styles.card}>
         <div className={styles.posterWrapper}>
           <Image
             src={movie.posterUrl}
-            alt={`بوستر فيلم ${movieTitle}`}
+            alt={`بوستر ${isSeries ? 'مسلسل' : 'فيلم'} ${movieTitle}`}
             fill
             sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 16vw"
             className={styles.posterImage}
