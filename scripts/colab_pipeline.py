@@ -1455,8 +1455,11 @@ def inspect_torrent_file_index(
             info = decoded.get("info", {})
             idx, pth = _find_best_index_from_info(info)
             if idx:
+                saved_torrent = os.path.join(staging_dir, "resolved.torrent")
+                if os.path.abspath(torrent_source) != os.path.abspath(saved_torrent):
+                    shutil.copy2(torrent_source, saved_torrent)
                 log("ARIA2", f"🎯 Pre-selected episode file index from local torrent: #{idx} -> '{pth}' for {target_tag}")
-                return idx, pth, torrent_source
+                return idx, pth, saved_torrent
         except Exception as e:
             log("ARIA2", f"Notice: failed to parse local torrent: {e}")
 
@@ -1465,7 +1468,7 @@ def inspect_torrent_file_index(
         try:
             r = requests.get(torrent_source, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
             if r.status_code == 200 and len(r.content) > 50 and r.content.startswith(b'd'):
-                saved_torrent = os.path.join(staging_dir, "inspected_release.torrent")
+                saved_torrent = os.path.join(staging_dir, "resolved.torrent")
                 with open(saved_torrent, "wb") as f:
                     f.write(r.content)
                 decoded = bdecode(r.content)
@@ -1474,13 +1477,19 @@ def inspect_torrent_file_index(
                 if idx:
                     log("ARIA2", f"🎯 Pre-selected episode file index from HTTP torrent: #{idx} -> '{pth}' for {target_tag}")
                     return idx, pth, saved_torrent
-        except Exception:
-            pass
+        except Exception as e:
+            log("ARIA2", f"Notice: HTTP torrent fetch failed: {e}")
 
     # Case 3: Magnet URI -> Fast metadata pre-fetch with aria2c
     if torrent_source.startswith("magnet:"):
         meta_dir = os.path.join(staging_dir, "meta_inspect")
         os.makedirs(meta_dir, exist_ok=True)
+        extra_trackers = (
+            "udp://tracker.opentrackr.org:1337/announce,"
+            "udp://open.stealth.si:80/announce,"
+            "udp://tracker.torrent.eu.org:451/announce,"
+            "udp://explodie.org:6969/announce"
+        )
         cmd = [
             "aria2c",
             f"--dir={meta_dir}",
@@ -1490,12 +1499,14 @@ def inspect_torrent_file_index(
             "--seed-time=0",
             "--follow-torrent=mem",
             "--disable-ipv6=true",
+            "--enable-dht=true",
+            f"--bt-tracker={extra_trackers}",
             "--bt-tracker-connect-timeout=10",
             torrent_source
         ]
         try:
             log("ARIA2", f"Fetching magnet metadata for {target_tag} selective download inspection...")
-            subprocess.run(cmd, timeout=30, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            res = subprocess.run(cmd, timeout=35, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
             for f in os.listdir(meta_dir):
                 if f.endswith(".torrent"):
                     tpath = os.path.join(meta_dir, f)
@@ -1504,8 +1515,10 @@ def inspect_torrent_file_index(
                     info = decoded.get("info", {})
                     idx, pth = _find_best_index_from_info(info)
                     if idx:
+                        saved_torrent = os.path.join(staging_dir, "resolved.torrent")
+                        shutil.copy2(tpath, saved_torrent)
                         log("ARIA2", f"🎯 Pre-selected episode file index from magnet metadata: #{idx} -> '{pth}' for {target_tag}")
-                        return idx, pth, tpath
+                        return idx, pth, saved_torrent
         except Exception as e:
             log("ARIA2", f"Notice: magnet metadata prefetch skipped/timed out: {e}")
 
@@ -1583,6 +1596,7 @@ def download_with_aria2(
     season_num: int = None,
     episode_num: int = None,
     is_season_pack: bool = False,
+    candidate_title: str = "",
     min_speed_mb: float = 1.0,
     timeout_check_start: float = 60.0,
     timeout_check_limit: float = 90.0,
@@ -1595,20 +1609,34 @@ def download_with_aria2(
       and logs: [ARIA2] ⚠️ Candidate is slow/dead (< 1 MB/s). Skipping to next candidate...
       then raises RuntimeError so the pipeline immediately proceeds to the next candidate swarm.
     """
-    # 0. Selective File Resolution for TV Season Packs & Multi-File Torrents
+    # 1. Aggressive sanitization FIRST: wipe and recreate download & staging dirs
+    # Purges leftover data while ensuring newly created .torrent files below are NOT deleted!
+    sanitize_download_dir(download_dir, staging_dir)
+    log("ARIA2", f"Starting multi-connection download into {download_dir}...")
+
+    # Detect if release is a season pack or complete series
+    title_str = str(candidate_title or torrent_source or "")
+    is_pack = is_season_pack or bool(re.search(r'\b(complete|season[\s._-]*\d+|s0*\d+[\s._-]*s0*\d+|series[\s._-]*pack|all[\s._-]*seasons)\b', title_str, re.IGNORECASE))
+
+    # 2. Selective File Resolution for TV Season Packs & Multi-File Torrents
     if season_num is not None and episode_num is not None:
-        if not select_file or is_season_pack:
+        if not select_file or is_pack:
             inspected_idx, inspected_path, inspected_src = inspect_torrent_file_index(
                 torrent_source, season_num, episode_num, staging_dir
             )
-            if inspected_idx:
+            if inspected_idx and inspected_src and os.path.exists(inspected_src):
                 select_file = inspected_idx
                 torrent_source = inspected_src
-                log("ARIA2", f"🎯 Season pack selective download active: selecting file #{select_file} ('{inspected_path}')")
+                log("ARIA2", f"🎯 Season pack selective download active: selecting file #{select_file} ('{inspected_path}') from local torrent on disk")
 
-    # 1. Aggressive sanitization: wipe and recreate download & staging dirs
-    sanitize_download_dir(download_dir, staging_dir)
-    log("ARIA2", f"Starting multi-connection download into {download_dir}...")
+    # 3. SAFETY GUARD AGAINST GIANT TORRENTS (> 10GB) WITHOUT SELECTIVE DOWNLOAD:
+    # If the release is identified as a season pack or complete series, but no valid episode file
+    # was selected or we still only have an unparsed magnet URI:
+    if is_pack:
+        if not select_file or str(torrent_source).startswith("magnet:") or not os.path.exists(str(torrent_source)):
+            log("ARIA2", "⛔ Refusing to download unindexed season pack without selective download!")
+            sanitize_download_dir(download_dir, staging_dir)
+            raise RuntimeError("Refusing to download unindexed season pack without selective download!")
 
     cmd = [
         "aria2c",
@@ -1627,8 +1655,13 @@ def download_with_aria2(
         "--disable-ipv6=true",
         "--bt-tracker-connect-timeout=10",
     ]
+    # IMPORTANT: Only pass --select-file when downloading from a local .torrent file, NEVER with a raw magnet!
     if select_file and isinstance(select_file, int) and select_file > 0:
-        cmd.append(f"--select-file={select_file}")
+        if not str(torrent_source).startswith("magnet:"):
+            cmd.append(f"--select-file={select_file}")
+        else:
+            log("ARIA2", "⚠️ Cannot pass --select-file with raw magnet URI; omitted to prevent exit code 1.")
+
     cmd.append(torrent_source)
 
     proc = subprocess.Popen(
@@ -4671,7 +4704,8 @@ def run_pipeline(
                         select_file=cand_file_idx,
                         season_num=parsed["season_number"],
                         episode_num=parsed["episode_number"],
-                        is_season_pack=candidate.get("is_season_pack", False)
+                        is_season_pack=candidate.get("is_season_pack", False),
+                        candidate_title=cand_title
                     )
                     if raw_video_path and os.path.exists(raw_video_path):
                         target_candidate = candidate
