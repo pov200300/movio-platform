@@ -209,12 +209,37 @@ export function getVidmolyFileCode(url) {
 }
 
 /**
- * Returns clean direct download URL for Vidmoly (1080p FHD):
- * https://vidmoly.to/dl/{fileCode}
+ * Returns clean direct stream/view URL for Vidmoly (1080p FHD):
+ * https://vidmoly.to/v/{fileCode}
+ * Uses /v/ to avoid MENA geo-restrictions encountered on /dl/.
  */
 export function getVidmolyDownloadUrl(url) {
   const code = getVidmolyFileCode(url);
-  return code ? `https://vidmoly.to/dl/${code}` : null;
+  return code ? `https://vidmoly.to/v/${code}` : null;
+}
+
+/**
+ * Converts DoodStream embed URLs (e.g. doodstream.com/e/CODE, dood.to/e/CODE, ds2play.com/e/CODE, doood.watch/e/CODE)
+ * to direct download URL format: https://doodstream.com/d/{fileCode}
+ */
+export function getDoodstreamDownloadUrl(url) {
+  if (!url || typeof url !== 'string') return null;
+  const cleanUrl = url.trim();
+  let match = cleanUrl.match(/(?:doodstream|dood|ds2play|doood)\.[a-z0-9-]+\/(?:e|d)\/([a-zA-Z0-9_-]+)/i);
+  if (!match) {
+    match = cleanUrl.match(/\/(?:e|d)\/([a-zA-Z0-9_-]+)/i);
+  }
+  if (!match && /^[a-zA-Z0-9_-]{6,}$/.test(cleanUrl)) {
+    match = [null, cleanUrl];
+  }
+  if (match && match[1]) {
+    const fileCode = match[1];
+    const reserved = ['embed', 'api', 'upload', 'dl', 'contact', 'faq'];
+    if (!reserved.includes(fileCode.toLowerCase())) {
+      return `https://doodstream.com/d/${fileCode}`;
+    }
+  }
+  return null;
 }
 
 /**
@@ -252,13 +277,35 @@ export function getStreamhgDownloadUrl(url) {
 }
 
 /**
- * Extracts dual-quality download links (1080p Vidmoly & 720p Fast Streamtape/StreamHG)
- * for a movie or post object.
+ * Extracts dual-quality download links:
+ * - 1080p Primary: DoodStream direct download (no MENA geo-restrictions)
+ * - 1080p Mirror: Vidmoly /v/ view/download link
+ * - 720p Speed: Streamtape (priority 1) or StreamHG (priority 2)
  */
 export function getDualQualityDownloadLinks(movie) {
-  if (!movie) return { download1080: null, download720: null, provider720: null };
+  if (!movie) {
+    return {
+      download1080_dood: null,
+      download1080_vidmoly: null,
+      download1080: null,
+      download720: null,
+      provider720: null,
+    };
+  }
 
-  // 1. Vidmoly 1080p Download Link
+  // 1. Doodstream 1080p Download Link (Primary 1080p - No Geo-restrictions)
+  let doodSource = movie.doodEmbed || movie.dood_embed || movie.dood_url || movie.doodstream_url || null;
+  if (!doodSource && Array.isArray(movie.servers)) {
+    const dServer = movie.servers.find(s => s && (s.id === 'doodstream' || s.id === 'dood' || (s.name && s.name.toLowerCase().includes('dood')) || (s.url && (s.url.includes('dood') || s.url.includes('ds2play') || s.url.includes('doood')))));
+    if (dServer) doodSource = dServer.url;
+  }
+  if (!doodSource && movie.embed_url_1080p && (movie.embed_url_1080p.includes('dood') || movie.embed_url_1080p.includes('ds2play') || movie.embed_url_1080p.includes('doood'))) {
+    doodSource = movie.embed_url_1080p;
+  }
+
+  const download1080_dood = getDoodstreamDownloadUrl(doodSource);
+
+  // 2. Vidmoly 1080p Secondary Mirror Link (Uses /v/ to bypass MENA dl/ block)
   let vidmolySource = movie.vidmolyEmbed || movie.vidmoly_url || movie.vidmoly_embed || null;
   if (!vidmolySource && Array.isArray(movie.servers)) {
     const vServer = movie.servers.find(s => s && (s.id === 'vidmoly' || (s.name && s.name.toLowerCase().includes('vidmoly')) || (s.url && s.url.includes('vidmoly'))));
@@ -271,9 +318,10 @@ export function getDualQualityDownloadLinks(movie) {
     vidmolySource = movie.primaryEmbed;
   }
 
-  const download1080 = getVidmolyDownloadUrl(vidmolySource);
+  const download1080_vidmoly = getVidmolyDownloadUrl(vidmolySource);
+  const download1080 = download1080_dood || download1080_vidmoly || null;
 
-  // 2. 720p Fast Download Link: Prioritize Streamtape first for uncapped download speed
+  // 3. 720p Fast Download Link: Prioritize Streamtape first for uncapped download speed
   let streamtapeSource = movie.streamtapeEmbed || movie.streamtape_url || movie.streamtape_embed || null;
   if (!streamtapeSource && Array.isArray(movie.servers)) {
     const sServer = movie.servers.find(s => s && (s.id === 'streamtape' || (s.name && s.name.toLowerCase().includes('streamtape')) || (s.url && s.url.includes('streamtape'))));
@@ -302,7 +350,13 @@ export function getDualQualityDownloadLinks(movie) {
     if (download720) provider720 = 'StreamHG';
   }
 
-  return { download1080, download720, provider720 };
+  return {
+    download1080_dood,
+    download1080_vidmoly,
+    download1080,
+    download720,
+    provider720,
+  };
 }
 
 /**
@@ -656,7 +710,14 @@ export function parseMovieData(post) {
                           null;
   const secureDirectStream = enforceHttps(rawDirectStream);
 
-  const { download1080, download720, provider720 } = getDualQualityDownloadLinks({
+  const {
+    download1080_dood,
+    download1080_vidmoly,
+    download1080,
+    download720,
+    provider720,
+  } = getDualQualityDownloadLinks({
+    doodEmbed: doodstreamUrl,
     vidmolyEmbed: vidmolyUrl,
     streamhgEmbed: streamhgUrl,
     streamtapeEmbed: streamtapeUrl,
@@ -696,6 +757,8 @@ export function parseMovieData(post) {
     embedUrl1080p: vidmolyUrl || doodstreamUrl || primaryEmbed,
     embedUrl720p: streamhgUrl || streamtapeUrl || primaryEmbed,
     servers,
+    download1080_dood,
+    download1080_vidmoly,
     download1080,
     download720,
     provider720,

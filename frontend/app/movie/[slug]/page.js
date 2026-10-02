@@ -154,8 +154,9 @@ export default async function MoviePage({ params }) {
 
   const movieTitle = (movie.cleanTitle || movie.title || movie.displayTitle || movie.rawTitle || 'الفيلم').trim();
 
-  // Derive dual-quality download links (1080p Vidmoly & 720p Fast Streamtape/StreamHG)
-  const download1080 = movie.download1080 || null;
+  // Derive dual-quality download links (1080p DoodStream + 720p Streamtape + 1080p Vidmoly mirror)
+  const download1080_dood = movie.download1080_dood || null;
+  const download1080_vidmoly = movie.download1080_vidmoly || null;
   const download720 = movie.download720 || null;
   const provider720 = movie.provider720 || 'Streamtape';
   const legacyDownloadUrl = getDownloadUrl(movie);
@@ -205,64 +206,89 @@ export default async function MoviePage({ params }) {
                 ▶ تشغيل الفيلم
               </a>
 
-              {/* Dual-Quality Download Options */}
-              <div className={styles.dualDownloadBox}>
-                <div className={styles.downloadBoxHeader}>
-                  <span className={styles.downloadHeaderIcon}>⬇</span>
-                  <span className={styles.downloadHeaderText}>سيرفرات التحميل المباشر:</span>
+              {/* Redesigned Modern Download Section Card */}
+              <div className={styles.downloadCard}>
+                <div className={styles.downloadCardHeader}>
+                  <span className={styles.downloadCardIcon}>⬇️</span>
+                  <span className={styles.downloadCardTitle}>سيرفرات التحميل المباشر والسريع</span>
                 </div>
 
-                <div className={styles.downloadButtonsStack}>
-                  {/* 1080p FHD Vidmoly Download Button */}
-                  {download1080 && (
+                <div className={styles.downloadCardButtons}>
+                  {/* Button 1: Primary 1080p (DoodStream - No Geo-restrictions) */}
+                  {download1080_dood && (
                     <a 
-                      href={download1080} 
+                      href={download1080_dood} 
                       target="_blank" 
                       rel="noopener noreferrer" 
-                      className={`${styles.actionBtnDownload} ${styles.actionBtnDownload1080}`}
-                      title="تحميل الفيلم بجودة Full HD 1080p فائقة الدقة عبر Vidmoly"
+                      className={`${styles.downloadBtn} ${styles.downloadBtn1080}`}
+                      title="تحميل الفيلم بجودة 1080p FHD عبر DoodStream (مباشر وسريع بدون حجب)"
                     >
-                      <span className={styles.badgeDownload1080}>1080p FHD</span>
-                      <span className={styles.btnDownloadText}>تحميل 1080p (FHD - Vidmoly)</span>
+                      <div className={styles.downloadBtnContent}>
+                        <span className={styles.downloadBtnLabel}>تحميل الفيلم بجودة 1080p FHD</span>
+                        <span className={styles.downloadBtnServer}>DoodStream (مباشر وسريع)</span>
+                      </div>
+                      <span className={styles.downloadBadge1080}>1080p FHD</span>
                     </a>
                   )}
 
-                  {/* 720p Fast Streamtape / StreamHG Download Button */}
+                  {/* Button 2: Speed 720p (Streamtape / StreamHG) */}
                   {download720 && (
                     <a 
                       href={download720} 
                       target="_blank" 
                       rel="noopener noreferrer" 
-                      className={`${styles.actionBtnDownload} ${styles.actionBtnDownload720}`}
-                      title={`تحميل الفيلم بجودة 720p عالية السرعة عبر ${provider720}`}
+                      className={`${styles.downloadBtn} ${styles.downloadBtn720}`}
+                      title={`تحميل الفيلم بجودة 720p عبر ${provider720 === 'Streamtape' ? 'Streamtape (أقصى سرعة)' : 'StreamHG'}`}
                     >
-                      <span className={styles.badgeDownload720}>720p Fast</span>
-                      <span className={styles.btnDownloadText}>تحميل 720p (HD فائق السرعة - {provider720})</span>
+                      <div className={styles.downloadBtnContent}>
+                        <span className={styles.downloadBtnLabel}>تحميل الفيلم بجودة 720p HD</span>
+                        <span className={styles.downloadBtnServer}>
+                          {provider720 === 'Streamtape' ? 'Streamtape (أقصى سرعة)' : 'StreamHG (سريع ومباشر)'}
+                        </span>
+                      </div>
+                      <span className={styles.downloadBadge720}>720p Fast</span>
                     </a>
                   )}
 
-                  {/* Single fallback download link if neither 1080p nor 720p is resolved */}
-                  {!download1080 && !download720 && legacyDownloadUrl && (
+                  {/* Button 3: Optional 1080p Mirror (Vidmoly /v/) */}
+                  {download1080_vidmoly && (
+                    <a 
+                      href={download1080_vidmoly} 
+                      target="_blank" 
+                      rel="noopener noreferrer" 
+                      className={`${styles.downloadBtn} ${styles.downloadBtnMirror}`}
+                      title="سيرفر بديل لمشاهدة وتحميل الفيلم بجودة 1080p عبر Vidmoly"
+                    >
+                      <div className={styles.downloadBtnContent}>
+                        <span className={styles.downloadBtnMirrorLabel}>مرآة بديلة 1080p (Vidmoly)</span>
+                        <span className={styles.downloadBtnServer}>Vidmoly Server</span>
+                      </div>
+                      <span className={styles.downloadBadgeMirror}>سيرفر بديل</span>
+                    </a>
+                  )}
+
+                  {/* Fallback to legacy single download if no dual servers resolved */}
+                  {!download1080_dood && !download720 && !download1080_vidmoly && legacyDownloadUrl && (
                     <a 
                       href={legacyDownloadUrl} 
                       target="_blank" 
                       rel="noopener noreferrer" 
-                      className={styles.actionBtnDownload}
-                      title="تحميل الفيلم"
+                      className={`${styles.downloadBtn} ${styles.downloadBtn1080}`}
+                      title="تحميل الفيلم المباشر"
                     >
-                      <span className={styles.btnDownloadText}>⬇ سيرفر التحميل المباشر</span>
+                      <div className={styles.downloadBtnContent}>
+                        <span className={styles.downloadBtnLabel}>تحميل الفيلم المباشر</span>
+                        <span className={styles.downloadBtnServer}>سيرفر التحميل</span>
+                      </div>
+                      <span className={styles.downloadBadge1080}>تحميل</span>
                     </a>
                   )}
 
                   {/* Disabled state when no download servers are found */}
-                  {!download1080 && !download720 && !legacyDownloadUrl && (
-                    <span 
-                      className={`${styles.actionBtnDownload} ${styles.actionBtnDownloadDisabled}`}
-                      aria-disabled="true"
-                      title="سيرفرات التحميل قيد التجهيز لهذا الفيلم"
-                    >
-                      التحميل غير متوفر حالياً
-                    </span>
+                  {!download1080_dood && !download720 && !download1080_vidmoly && !legacyDownloadUrl && (
+                    <div className={styles.downloadDisabledNotice}>
+                      <span>التحميل غير متوفر حالياً لهذا الفيلم</span>
+                    </div>
                   )}
                 </div>
               </div>
@@ -361,51 +387,85 @@ export default async function MoviePage({ params }) {
             directStreamUrl={movie.directStreamUrl}
             posterUrl={movie.posterUrl} 
             title={movie.rawTitle} 
-            download1080={download1080}
+            download1080_dood={download1080_dood}
+            download1080_vidmoly={download1080_vidmoly}
             download720={download720}
             provider720={provider720}
           />
 
           {/* Dual-Quality Download Bar under Player */}
-          {(download1080 || download720 || legacyDownloadUrl) && (
-            <div className={styles.playerDownloadBar}>
-              <div className={styles.playerDownloadTitle}>
-                <span className={styles.playerDownloadIcon}>📥</span>
-                <span>تحميل الفيلم مباشرة إلى جهازك:</span>
+          {(download1080_dood || download720 || download1080_vidmoly || legacyDownloadUrl) && (
+            <div className={styles.playerDownloadCard}>
+              <div className={styles.playerDownloadCardHeader}>
+                <div className={styles.playerDownloadTitleGroup}>
+                  <span className={styles.playerDownloadIcon}>⬇️</span>
+                  <span className={styles.playerDownloadHeading}>سيرفرات التحميل المباشر والسريع</span>
+                </div>
+                <span className={styles.playerDownloadSub}>اختر الجودة وسيرفر التحميل المفضل لجهازك للتحميل المباشر بدون قيود</span>
               </div>
-              <div className={styles.playerDownloadActions}>
-                {download1080 && (
+
+              <div className={styles.playerDownloadGrid}>
+                {download1080_dood && (
                   <a
-                    href={download1080}
+                    href={download1080_dood}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className={`${styles.playerDownloadBtn} ${styles.playerDownloadBtn1080}`}
-                    title="تحميل مباشر 1080p عبر Vidmoly"
+                    className={`${styles.downloadBtn} ${styles.downloadBtn1080}`}
+                    title="تحميل مباشر 1080p FHD عبر DoodStream بدون حجب"
                   >
-                    <span className={styles.badgeDownload1080}>1080p FHD</span>
-                    <span>تحميل 1080p (FHD - Vidmoly)</span>
+                    <div className={styles.downloadBtnContent}>
+                      <span className={styles.downloadBtnLabel}>تحميل الفيلم بجودة 1080p FHD</span>
+                      <span className={styles.downloadBtnServer}>DoodStream (مباشر وسريع)</span>
+                    </div>
+                    <span className={styles.downloadBadge1080}>1080p FHD</span>
                   </a>
                 )}
+
                 {download720 && (
                   <a
                     href={download720}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className={`${styles.playerDownloadBtn} ${styles.playerDownloadBtn720}`}
-                    title={`تحميل فائق السرعة 720p عبر ${provider720}`}
+                    className={`${styles.downloadBtn} ${styles.downloadBtn720}`}
+                    title={`تحميل فائق السرعة 720p HD عبر ${provider720}`}
                   >
-                    <span className={styles.badgeDownload720}>720p Fast</span>
-                    <span>تحميل 720p (HD فائق السرعة - {provider720})</span>
+                    <div className={styles.downloadBtnContent}>
+                      <span className={styles.downloadBtnLabel}>تحميل الفيلم بجودة 720p HD</span>
+                      <span className={styles.downloadBtnServer}>
+                        {provider720 === 'Streamtape' ? 'Streamtape (أقصى سرعة)' : 'StreamHG (سريع ومباشر)'}
+                      </span>
+                    </div>
+                    <span className={styles.downloadBadge720}>720p Fast</span>
                   </a>
                 )}
-                {!download1080 && !download720 && legacyDownloadUrl && (
+
+                {download1080_vidmoly && (
+                  <a
+                    href={download1080_vidmoly}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className={`${styles.downloadBtn} ${styles.downloadBtnMirror}`}
+                    title="مرآة بديلة 1080p عبر Vidmoly"
+                  >
+                    <div className={styles.downloadBtnContent}>
+                      <span className={styles.downloadBtnMirrorLabel}>مرآة بديلة 1080p (Vidmoly)</span>
+                      <span className={styles.downloadBtnServer}>Vidmoly Server</span>
+                    </div>
+                    <span className={styles.downloadBadgeMirror}>سيرفر بديل</span>
+                  </a>
+                )}
+
+                {!download1080_dood && !download720 && !download1080_vidmoly && legacyDownloadUrl && (
                   <a
                     href={legacyDownloadUrl}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className={styles.playerDownloadBtn}
+                    className={`${styles.downloadBtn} ${styles.downloadBtn1080}`}
                   >
-                    <span>⬇ سيرفر التحميل المباشر</span>
+                    <div className={styles.downloadBtnContent}>
+                      <span className={styles.downloadBtnLabel}>تحميل الفيلم المباشر</span>
+                    </div>
+                    <span className={styles.downloadBadge1080}>تحميل</span>
                   </a>
                 )}
               </div>

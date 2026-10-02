@@ -49,6 +49,8 @@ export default function VideoPlayer({
   embedHtml,
   posterUrl,
   title,
+  download1080_dood,
+  download1080_vidmoly,
   download1080,
   download720,
   provider720,
@@ -199,19 +201,26 @@ export default function VideoPlayer({
 
   const activeUrl = formattedServerUrl;
 
-  // Derive dual-quality download links (1080p Vidmoly & 720p Fast Streamtape/StreamHG)
+  // Derive dual-quality download links (1080p DoodStream/Vidmoly & 720p Fast Streamtape/StreamHG)
   const resolvedDownloads = useMemo(() => {
-    if (download1080 || download720) {
-      return { download1080, download720, provider720: provider720 || 'Streamtape' };
+    if (download1080_dood || download720 || download1080_vidmoly || download1080) {
+      return {
+        download1080_dood: download1080_dood || null,
+        download1080_vidmoly: download1080_vidmoly || null,
+        download1080: download1080_dood || download1080 || download1080_vidmoly || null,
+        download720,
+        provider720: provider720 || 'Streamtape',
+      };
     }
     return getDualQualityDownloadLinks({
+      doodEmbed,
       vidmolyEmbed,
       streamhgEmbed: streamhgEmbed || hgcloudEmbed,
       streamtapeEmbed,
       servers: resolvedServers,
       primaryEmbed: primaryEmbed || embedUrl,
     });
-  }, [download1080, download720, provider720, vidmolyEmbed, streamhgEmbed, hgcloudEmbed, streamtapeEmbed, resolvedServers, primaryEmbed, embedUrl]);
+  }, [download1080_dood, download1080_vidmoly, download1080, download720, provider720, doodEmbed, vidmolyEmbed, streamhgEmbed, hgcloudEmbed, streamtapeEmbed, resolvedServers, primaryEmbed, embedUrl]);
 
   // Resolve direct stream link for optional EGYMAX VIP player
   const resolveStream = useCallback(async () => {
@@ -352,17 +361,17 @@ export default function VideoPlayer({
             )}
 
             {/* Dual-Quality Quick Download Buttons in Player */}
-            {resolvedDownloads.download1080 && (
+            {(resolvedDownloads.download1080_dood || resolvedDownloads.download1080) && (
               <a
-                href={resolvedDownloads.download1080}
+                href={resolvedDownloads.download1080_dood || resolvedDownloads.download1080}
                 target="_blank"
                 rel="noopener noreferrer"
                 className={styles.serverTab}
                 style={{ borderColor: 'rgba(56, 189, 248, 0.4)', color: '#38bdf8', textDecoration: 'none' }}
-                title="تحميل الفيلم بجودة 1080p FHD عبر Vidmoly"
+                title="تحميل الفيلم بجودة 1080p FHD عبر DoodStream (مباشر وسريع)"
               >
                 <span>📥 تحميل 1080p</span>
-                <span className={`${styles.tabBadge} ${styles.tabBadgeVip}`} style={{ background: '#0284c7' }}>FHD</span>
+                <span className={`${styles.tabBadge} ${styles.tabBadgeVip}`} style={{ background: '#0284c7' }}>1080p</span>
               </a>
             )}
             {resolvedDownloads.download720 && (
