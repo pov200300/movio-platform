@@ -285,6 +285,7 @@
   flex-direction: column;
   gap: 0.4rem;
   text-align: right;
+  text-decoration: none;
   transition: all 0.2s ease;
 }
 
@@ -367,6 +368,70 @@
 .playIconIdle {
   font-size: 0.75rem;
   color: var(--text-muted);
+}
+
+/* Next / Previous Episode Navigation Bar */
+.episodeNavRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-top: 1.25rem;
+  margin-bottom: 1.25rem;
+  padding: 0.85rem 1.25rem;
+  background: rgba(15, 23, 42, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius-md);
+  backdrop-filter: blur(8px);
+}
+
+.episodeNavBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 8px 16px;
+  background: #1e293b;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: var(--radius-sm);
+  color: #ffffff;
+  font-size: 0.88rem;
+  font-weight: 700;
+  text-decoration: none;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.episodeNavBtn:hover {
+  background: var(--accent-red);
+  border-color: var(--accent-red);
+  color: #ffffff;
+  box-shadow: 0 4px 15px var(--accent-red-glow);
+  transform: translateY(-1px);
+}
+
+.episodeNavBtnDisabled {
+  background: rgba(30, 41, 59, 0.4);
+  border-color: rgba(255, 255, 255, 0.04);
+  color: #64748b;
+  cursor: not-allowed;
+  pointer-events: none;
+  transform: none !important;
+  box-shadow: none !important;
+}
+
+.episodeNavCenter {
+  display: flex;
+  align-items: center;
+}
+
+.episodeNavBadge {
+  font-size: 0.88rem;
+  font-weight: 700;
+  color: #94a3b8;
+  background: rgba(255, 255, 255, 0.05);
+  padding: 5px 12px;
+  border-radius: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
 }
 
 /* Episode Dual-Quality Download Bar */

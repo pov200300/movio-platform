@@ -923,12 +923,15 @@ export function groupPostsIntoSeries(posts) {
         titleAr: movie.titleAr || (rawTitle.includes('مسلسل') ? `مسلسل ${seriesTitle}` : seriesTitle),
         year: movie.year || meta.release_year || '2024',
         rating: movie.rating && movie.rating !== 'N/A' ? movie.rating : '8.5',
-        status: meta.series_status || 'مستمر',
+        status: meta.series_status || 'مكتمل',
         quality: movie.quality || '1080p Full HD',
         genres: movie.genres && movie.genres.length > 0 ? movie.genres : ['دراما', 'إثارة'],
         posterUrl: movie.posterUrl,
+        poster_url: movie.posterUrl,
         backdropUrl: meta.backdrop_url || movie.posterUrl,
+        backdrop_url: meta.backdrop_url || movie.posterUrl,
         synopsis: movie.synopsis || `مشاهدة وتحميل جميع مواسم وحلقات مسلسل ${seriesTitle} مترجم كامل بجودة عالية 1080p FHD على منصة EgyMax.`,
+        overview: movie.synopsis || `مشاهدة وتحميل جميع مواسم وحلقات مسلسل ${seriesTitle} مترجم كامل بجودة عالية 1080p FHD على منصة EgyMax.`,
         cast: movie.cast || [],
         seasonsMap: new Map(),
       });
@@ -940,6 +943,7 @@ export function groupPostsIntoSeries(posts) {
     if (!show.seasonsMap.has(seasonNumber)) {
       show.seasonsMap.set(seasonNumber, {
         seasonNumber,
+        season_number: seasonNumber,
         title: `الموسم ${seasonNumber}`,
         episodes: [],
       });
@@ -948,12 +952,33 @@ export function groupPostsIntoSeries(posts) {
     const seasonObj = show.seasonsMap.get(seasonNumber);
     // Add episode if not already present
     if (!seasonObj.episodes.some((e) => e.episodeNumber === episodeNumber)) {
+      const epQualities = [];
+      if (movie.vidmolyEmbed || movie.doodEmbed || (movie.quality && movie.quality.includes('1080'))) {
+        epQualities.push('1080p FHD');
+      }
+      if (movie.streamhgEmbed || movie.streamtapeEmbed || (movie.quality && movie.quality.includes('720'))) {
+        epQualities.push('720p HD');
+      }
+      if (epQualities.length === 0) {
+        epQualities.push(movie.quality || '1080p FHD');
+      }
+
+      const watchUrl = `/series/${seriesSlug}/s${seasonNumber}e${episodeNumber}`;
+
       seasonObj.episodes.push({
         id: `ep-${post.id || `${seriesSlug}-s${seasonNumber}e${episodeNumber}`}`,
         episodeNumber,
+        episode_number: episodeNumber,
+        seasonNumber,
+        season_number: seasonNumber,
         title: `الحلقة ${episodeNumber}`,
+        slug: movie.slug || `${seriesSlug}-s${seasonNumber}e${episodeNumber}`,
+        watch_url: watchUrl,
+        watchUrl: watchUrl,
         duration: meta.duration || '45 دقيقة',
         servers: movie.servers || [],
+        qualities: epQualities,
+        quality: movie.quality || '1080p FHD',
         primaryEmbed: movie.primaryEmbed || movie.embedUrl,
         vidmolyEmbed: movie.vidmolyEmbed,
         streamhgEmbed: movie.streamhgEmbed,
@@ -963,6 +988,7 @@ export function groupPostsIntoSeries(posts) {
         embedUrl: movie.embedUrl || movie.primaryEmbed || movie.vidmolyEmbed || movie.doodEmbed,
         download1080_dood: movie.download1080_dood,
         download720: movie.download720,
+        download1080_vidmoly: movie.download1080_vidmoly || (movie.vidmolyEmbed ? getVidmolyDownloadUrl(movie.vidmolyEmbed) : null),
         synopsis: movie.synopsis,
       });
     }
@@ -972,6 +998,7 @@ export function groupPostsIntoSeries(posts) {
   return Array.from(seriesMap.values()).map((show) => {
     const seasons = Array.from(show.seasonsMap.values())
       .map((s) => {
+        s.season_number = s.seasonNumber;
         s.episodes.sort((a, b) => a.episodeNumber - b.episodeNumber);
         return s;
       })
@@ -986,13 +1013,22 @@ export function groupPostsIntoSeries(posts) {
       seasons: seasons.length > 0 ? seasons : [
         {
           seasonNumber: 1,
+          season_number: 1,
           title: 'الموسم الأول',
           episodes: [
             {
               episodeNumber: 1,
+              episode_number: 1,
+              seasonNumber: 1,
+              season_number: 1,
               title: 'الحلقة 1',
+              slug: `${show.slug}-s01e01`,
+              watch_url: `/series/${show.slug}/s1e1`,
+              watchUrl: `/series/${show.slug}/s1e1`,
               duration: '45 دقيقة',
               servers: [],
+              qualities: ['1080p FHD'],
+              quality: '1080p FHD',
               embedUrl: null,
             },
           ],
@@ -1048,36 +1084,87 @@ export async function getSeriesList({ search = '', category = null } = {}) {
 
 /**
  * Fetch a single series by slug with complete seasons and episodes.
+ * Aggregates individual episode posts into a unified TV Series Object.
  */
 export async function getSeriesBySlug(slug) {
   if (!slug) return null;
 
-  const cleanSlug = slug.toLowerCase();
-  if (cleanSlug.startsWith('breaking-bad')) return null;
+  const targetSlug = slug.toLowerCase().trim();
 
-  // Search in WordPress by slug or clean series name
   try {
-    const searchTerms = [slug.replace(/-/g, ' '), slug];
-    let candidatePosts = [];
+    // 1. If direct post by slug exists and is already a complete series with seasons
+    const directPost = await getMovieBySlug(targetSlug);
+    if (directPost && directPost.seasons && Array.isArray(directPost.seasons) && directPost.seasons.length > 0) {
+      return directPost;
+    }
 
-    // Try direct post by slug
-    const directPost = await getMovieBySlug(slug);
-    if (directPost) {
+    // 2. Fetch candidate episode posts from WordPress
+    // Fetch via search, and also fetch recent posts to guarantee full episode retrieval
+    const cleanSearchQuery = targetSlug.replace(/-/g, ' ');
+    const [searchPosts, recentPosts] = await Promise.all([
+      searchMovies({ search: cleanSearchQuery, perPage: 50 }).catch(() => []),
+      fetchAPI('posts?per_page=100&_embed').catch(() => []),
+    ]);
+
+    const candidatePosts = [];
+    const seenIds = new Set();
+
+    if (directPost && directPost.id) {
+      seenIds.add(directPost.id);
       candidatePosts.push(directPost);
     }
 
-    // Also search for all episodes belonging to this show
-    const relatedPosts = await searchMovies({ search: searchTerms[0], perPage: 50 });
-    if (Array.isArray(relatedPosts)) {
-      candidatePosts.push(...relatedPosts);
+    for (const p of [...(searchPosts || []), ...(recentPosts || [])]) {
+      if (p && p.id && !seenIds.has(p.id)) {
+        seenIds.add(p.id);
+        candidatePosts.push(p);
+      }
     }
 
-    if (candidatePosts.length > 0) {
-      const grouped = groupPostsIntoSeries(candidatePosts);
+    // 3. Filter posts belonging to this TV Show
+    const matchingEpisodePosts = candidatePosts.filter((post) => {
+      if (!post) return false;
+      const meta = { ...(post.meta_input || {}), ...(post.meta || {}) };
+      const postSlug = (post.slug || '').toLowerCase();
+      const postTitle = (post.title?.rendered || '').toLowerCase();
+
+      // Explicit meta match
+      if (meta.show_slug && meta.show_slug.toLowerCase() === targetSlug) return true;
+      if (meta.series_slug && meta.series_slug.toLowerCase() === targetSlug) return true;
+
+      // Slug prefix match: e.g. "breaking-bad-s01e01" begins with "breaking-bad"
+      if (postSlug === targetSlug || postSlug.startsWith(`${targetSlug}-`) || postSlug.startsWith(targetSlug)) return true;
+
+      // Title match: e.g. "Breaking Bad S01E01" begins with "breaking bad"
+      if (postTitle.startsWith(cleanSearchQuery) || postTitle.includes(cleanSearchQuery)) return true;
+
+      // Check parsed series slug from movie data
+      const parsedSlug = postSlug
+        .replace(/-s\d+e\d+/gi, '')
+        .replace(/-season-\d+/gi, '')
+        .replace(/-episode-\d+/gi, '')
+        .replace(/-ep-\d+/gi, '')
+        .replace(/-+/g, '-')
+        .replace(/^-|-$/g, '');
+      if (parsedSlug === targetSlug) return true;
+
+      return false;
+    });
+
+    if (matchingEpisodePosts.length > 0) {
+      const groupedSeries = groupPostsIntoSeries(matchingEpisodePosts);
       const matched =
-        grouped.find((s) => s.slug === slug || slug.startsWith(s.slug) || s.slug.startsWith(slug)) ||
-        grouped[0];
-      if (matched) return matched;
+        groupedSeries.find(
+          (s) =>
+            s.slug.toLowerCase() === targetSlug ||
+            targetSlug.startsWith(s.slug.toLowerCase()) ||
+            s.slug.toLowerCase().startsWith(targetSlug)
+        ) || groupedSeries[0];
+
+      if (matched) {
+        matched.slug = targetSlug;
+        return matched;
+      }
     }
   } catch (err) {
     console.warn('[Series API] WP getSeriesBySlug notice:', err.message);

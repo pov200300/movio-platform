@@ -4190,6 +4190,7 @@ def publish_movie_to_pantheon(
         episode_num = ep_data.get("episode_number") or meta.get("episode_number") or 1
         ep_tag = ep_data.get("episode_tag") or meta.get("episode_tag") or f"S{int(season_num):02d}E{int(episode_num):02d}"
 
+        show_slug = re.sub(r'[^a-zA-Z0-9]+', '-', show_name.lower()).strip('-')
         clean_slug = re.sub(r'[^a-zA-Z0-9]+', '-', f"{show_name}-{ep_tag}".lower()).strip('-')
         title = f"{show_name} {ep_tag}"
         log("WP", f"Publishing TV Episode post to Pantheon: '{title}'...")
@@ -4197,6 +4198,10 @@ def publish_movie_to_pantheon(
         seo_intro_paragraph = meta.get("seo_description") or f"مشاهدة وتحميل مسلسل {meta.get('title_ar') or show_name} الموسم {season_num} الحلقة {episode_num} ({ep_tag}) مترجمة كاملة بجودة 1080p BluRay عالية أون لاين."
         story_paragraph = meta.get("overview_ar") or meta.get("overview") or f"تدور أحداث الحلقة {episode_num} من الموسم {season_num} لمسلسل {show_name} في إطار درامي مشوق ومثير."
     else:
+        show_slug = ""
+        season_num = 0
+        episode_num = 0
+        ep_tag = ""
         clean_slug = re.sub(r'[^a-zA-Z0-9]+', '-', meta['title'].lower()).strip('-')
         title = f"{meta['title']} ({meta['year']})"
         log("WP", f"Publishing movie post to Pantheon: '{title}'...")
@@ -4282,10 +4287,13 @@ def publish_movie_to_pantheon(
         "title_ar": meta.get("title_ar", ""),
         "seo_description": seo_intro_paragraph,
         "type": "tv_episode" if is_ep else "movie",
-        "show_title": (ep_data.get("show_name") or meta.get("show_name", "")) if is_ep else "",
-        "season_number": str(ep_data.get("season_number", meta.get("season_number", ""))) if is_ep else "",
-        "episode_number": str(ep_data.get("episode_number", meta.get("episode_number", ""))) if is_ep else "",
-        "episode_tag": (ep_data.get("episode_tag") or meta.get("episode_tag", "")) if is_ep else ""
+        "show_slug": show_slug if is_ep else "",
+        "series_slug": show_slug if is_ep else "",
+        "show_title": (ep_data.get("show_name") or meta.get("show_name") or show_name) if is_ep else "",
+        "series_name": (ep_data.get("show_name") or meta.get("show_name") or show_name) if is_ep else "",
+        "season_number": int(season_num) if is_ep else "",
+        "episode_number": int(episode_num) if is_ep else "",
+        "episode_tag": ep_tag if is_ep else ""
     }
 
     post_payload = {

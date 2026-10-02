@@ -1,5 +1,6 @@
 'use client';
 import { useState, useMemo } from 'react';
+import Link from 'next/link';
 import VideoPlayer from '../../../components/VideoPlayer';
 import {
   getDoodstreamDownloadUrl,
@@ -26,6 +27,10 @@ export default function SeriesClient({ series, initialSeason = null, initialEpis
   const [activeEpisodeNum, setActiveEpisodeNum] = useState(defaultEpisode);
 
   const currentEpisode = episodes.find((e) => e.episodeNumber === activeEpisodeNum) || episodes[0];
+
+  const currentEpIndex = episodes.findIndex((e) => e.episodeNumber === activeEpisodeNum);
+  const prevEpisode = currentEpIndex > 0 ? episodes[currentEpIndex - 1] : null;
+  const nextEpisode = currentEpIndex >= 0 && currentEpIndex < episodes.length - 1 ? episodes[currentEpIndex + 1] : null;
 
   const handleSeasonChange = (num) => {
     setActiveSeasonNum(num);
@@ -90,6 +95,49 @@ export default function SeriesClient({ series, initialSeason = null, initialEpis
           posterUrl={series.backdropUrl || series.posterUrl}
           title={`${series.title} — الموسم ${activeSeasonNum} (الحلقة ${activeEpisodeNum})`}
         />
+
+        {/* Next / Previous Episode Navigation Bar */}
+        <div className={styles.episodeNavRow}>
+          {prevEpisode ? (
+            <Link
+              href={prevEpisode.watch_url || `/series/${series.slug}/s${activeSeasonNum}e${prevEpisode.episodeNumber}`}
+              onClick={() => handleEpisodeChange(prevEpisode.episodeNumber)}
+              className={styles.episodeNavBtn}
+              title={`الانتقال إلى الحلقة السابقة (${prevEpisode.title || `الحلقة ${prevEpisode.episodeNumber}`})`}
+            >
+              <span>‹</span>
+              <span>الحلقة السابقة ({prevEpisode.episodeNumber})</span>
+            </Link>
+          ) : (
+            <span className={`${styles.episodeNavBtn} ${styles.episodeNavBtnDisabled}`}>
+              <span>‹</span>
+              <span>الحلقة السابقة</span>
+            </span>
+          )}
+
+          <div className={styles.episodeNavCenter}>
+            <span className={styles.episodeNavBadge}>
+              الموسم {activeSeasonNum} • الحلقة {activeEpisodeNum} {episodes.length > 1 ? `من ${episodes.length}` : ''}
+            </span>
+          </div>
+
+          {nextEpisode ? (
+            <Link
+              href={nextEpisode.watch_url || `/series/${series.slug}/s${activeSeasonNum}e${nextEpisode.episodeNumber}`}
+              onClick={() => handleEpisodeChange(nextEpisode.episodeNumber)}
+              className={styles.episodeNavBtn}
+              title={`الانتقال إلى الحلقة التالية (${nextEpisode.title || `الحلقة ${nextEpisode.episodeNumber}`})`}
+            >
+              <span>الحلقة التالية ({nextEpisode.episodeNumber})</span>
+              <span>›</span>
+            </Link>
+          ) : (
+            <span className={`${styles.episodeNavBtn} ${styles.episodeNavBtnDisabled}`}>
+              <span>الحلقة التالية</span>
+              <span>›</span>
+            </span>
+          )}
+        </div>
 
         {/* Dual-Quality Download Bar for Active Episode */}
         {(download1080_dood || download720 || download1080_vidmoly) && (
@@ -194,10 +242,11 @@ export default function SeriesClient({ series, initialSeason = null, initialEpis
         <div className={styles.episodesGrid}>
           {episodes.map((ep) => {
             const isSelected = activeEpisodeNum === ep.episodeNumber;
+            const episodeWatchUrl = ep.watch_url || `/series/${series.slug}/s${activeSeasonNum}e${ep.episodeNumber}`;
             return (
-              <button
+              <Link
                 key={ep.episodeNumber}
-                type="button"
+                href={episodeWatchUrl}
                 onClick={() => handleEpisodeChange(ep.episodeNumber)}
                 className={`${styles.episodeCard} ${isSelected ? styles.activeEpisodeCard : ''}`}
                 title={`تشغيل ${ep.title || `الحلقة ${ep.episodeNumber}`}`}
@@ -215,7 +264,7 @@ export default function SeriesClient({ series, initialSeason = null, initialEpis
                     <span className={styles.playIconIdle}>▶ تشغيل</span>
                   )}
                 </div>
-              </button>
+              </Link>
             );
           })}
         </div>
