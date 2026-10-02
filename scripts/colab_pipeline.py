@@ -21,6 +21,8 @@ import zipfile
 import io
 import requests
 import subprocess
+import threading
+import queue
 from urllib.parse import quote, quote_plus
 from requests.auth import HTTPBasicAuth
 from bs4 import BeautifulSoup
@@ -695,15 +697,28 @@ def matches_show_tokens(show_name: str, title: str, season_num: int = None, epis
 
     return True
 
+def is_excluded_release(text: str) -> bool:
+    r"""
+    Strictly excludes releases that break release quality or subtitle sync:
+    - CAM, TeleSync, Telecine, Screeners (CAM, HDCAM, TS, HD-TS, TC, SCR)
+    - Low-grade HDTV / TVRip (unless explicitly marked as BluRay or WEB-DL)
+    """
+    if not text:
+        return False
+    t = " " + re.sub(r'[\s._\-]+', ' ', text.lower()) + " "
+    if re.search(r'\b(cam|hdcam|camrip|telesync|ts|hdts|telecine|tc|scr|screener|dvdscr|bdscr)\b', t):
+        return True
+    if re.search(r'\b(hdtv|pdtv|dsr|tvrip|hdtvrip)\b', t) and not re.search(r'\b(bluray|bdrip|brrip|bdr|web dl|webdl|webrip)\b', t):
+        return True
+    return False
+
 def fetch_tv_torrent(show_name: str, season_num: int, episode_num: int, imdb_id: str = None, preferred_quality: str = "1080p") -> dict:
     """
-    Unified Multi-Indexer TV Torrent Resolver:
-    1. Primary Swarm Indexer: APIBay (The Pirate Bay API - open, fast, no Cloudflare/Colab blocks).
-    2. Secondary Swarm Indexer: EZTV API across active mirrors.
-    3. Tertiary Swarm Indexer: Torrentio public stream provider.
-    - Strict boundary phrase & season/episode validation prevents false matches.
-    - Enforces seeds > 0 (filters out dead swarms).
-    - Returns sorted candidate list (1080p -> 720p, descending by seeds count) for resilient download fallback.
+    Unified Multi-Indexer TV Torrent Resolver with Release Tier Prioritization:
+    - Tier 1 (Highest Priority): BluRay / BDRip releases (sorted by highest seeders among them).
+    - Tier 2 (Fallback only): High-quality WEB-DL / WEBRip (sorted by highest seeders).
+    - Strictly excludes CAM, Telesync, and low-grade HDTV releases.
+    - Preserves BluRay precedence to guarantee precise subtitle frame timing.
     """
     episode_tag = f"S{season_num:02d}E{episode_num:02d}"
     log("TV", f"Searching TV torrent swarms for {show_name} {episode_tag} (IMDb: {imdb_id or 'N/A'})...")
@@ -734,6 +749,8 @@ def fetch_tv_torrent(show_name: str, season_num: int, episode_num: int, imdb_id:
                     name = item.get("name", "")
                     info_hash = item.get("info_hash", "")
                     if not info_hash or info_hash == "0000000000000000000000000000000000000000" or name == "No results returned":
+                        continue
+                    if is_excluded_release(name):
                         continue
                     if not matches_show_tokens(show_name, name, season_num, episode_num):
                         continue
@@ -776,6 +793,8 @@ def fetch_tv_torrent(show_name: str, season_num: int, episode_num: int, imdb_id:
                         break
                     for t in torrents:
                         t_title = t.get("title", "")
+                        if is_excluded_release(t_title):
+                            continue
                         if not matches_show_tokens(show_name, t_title, season_num, episode_num):
                             continue
                         s_count = int(t.get("seeds") or 0)
@@ -811,70 +830,135 @@ def fetch_tv_torrent(show_name: str, season_num: int, episode_num: int, imdb_id:
             matched_torrents.append(et)
         log("TV", f"Merged swarm pool: {apibay_count} APIBay + {len(eztv_matched)} EZTV = {len(matched_torrents)} total candidates")
 
-    # 3. Tertiary Fallback: Torrentio public stream provider
-    if not matched_torrents and imdb_id:
+    # 3. Tertiary Swarm Indexer: Torrentio (queried unconditionally to merge verified high-seeder swarms)
+    if imdb_id:
         try:
             full_imdb = imdb_id if imdb_id.startswith("tt") else f"tt{imdb_id}"
             stream_url = f"https://torrentio.strem.fun/stream/series/{full_imdb}:{season_num}:{episode_num}.json"
-            sr = requests.get(stream_url, headers=HEADERS, timeout=8)
+            sr = requests.get(stream_url, headers=HEADERS, timeout=10)
             if sr.status_code == 200:
                 streams = sr.json().get("streams", [])
+                torrentio_matched = []
                 for s in streams:
                     raw_title = s.get("title", "")
                     lines = [l.strip() for l in raw_title.split("\n") if l.strip()]
                     rel_title = lines[0] if lines else s.get("name", "")
-                    if not matches_show_tokens(show_name, rel_title, season_num, episode_num):
+                    filename = s.get("behaviorHints", {}).get("filename", "")
+                    full_cand_text = f"{rel_title} {filename}"
+                    
+                    if is_excluded_release(full_cand_text):
                         continue
+
+                    # Match on either the torrent release title or the specific episode filename inside it
+                    matches_title = matches_show_tokens(show_name, rel_title, season_num, episode_num)
+                    matches_file = bool(filename and matches_show_tokens(show_name, filename, season_num, episode_num))
+                    if not (matches_title or matches_file):
+                        continue
+
                     seeds_match = re.search(r'[👤👥]\s*([0-9]+)', raw_title) or re.search(r'([0-9]+)\s*[💾]', raw_title)
                     s_seeds = int(seeds_match.group(1)) if seeds_match else 0
                     if s_seeds <= 0:
                         continue
+
                     info_hash = s.get("infoHash")
-                    if info_hash:
-                        magnet = f"magnet:?xt=urn:btih:{info_hash}&dn={quote(rel_title)}{trackers_query}"
-                        matched_torrents.append({
-                            "title": rel_title,
-                            "torrent_url": None,
-                            "magnet_uri": magnet,
-                            "seeds": s_seeds,
-                            "size_bytes": 0,
-                            "source": "Torrentio"
-                        })
-                if matched_torrents:
-                    log("TV", f"Torrentio resolved {len(matched_torrents)} releases for {episode_tag}")
+                    if not info_hash:
+                        continue
+
+                    raw_fidx = s.get("fileIdx")
+                    fidx = (raw_fidx + 1) if (isinstance(raw_fidx, int) and raw_fidx >= 0) else None
+                    # Use filename if rel_title is a generic season pack
+                    display_title = filename if (filename and re.search(rf's0*{season_num}\s*e0*{episode_num}', filename, re.I)) else rel_title
+                    magnet = f"magnet:?xt=urn:btih:{info_hash}&dn={quote(display_title)}{trackers_query}"
+                    torrentio_matched.append({
+                        "title": display_title,
+                        "filename": filename,
+                        "torrent_url": None,
+                        "magnet_uri": magnet,
+                        "seeds": s_seeds,
+                        "size_bytes": 0,
+                        "source": "Torrentio",
+                        "file_idx": fidx,
+                        "info_hash": info_hash.lower()
+                    })
+
+                # Deduplicate and merge Torrentio swarms
+                if torrentio_matched:
+                    existing_hashes = {}
+                    for idx, t in enumerate(matched_torrents):
+                        m_uri = t.get("magnet_uri") or ""
+                        h = re.search(r'btih:([a-fA-F0-9]+)', m_uri)
+                        if h:
+                            existing_hashes[h.group(1).lower()] = idx
+
+                    added_count = 0
+                    for tm in torrentio_matched:
+                        h = tm.get("info_hash")
+                        if h and h in existing_hashes:
+                            # Update seed count if Torrentio reports higher active swarm
+                            matched_torrents[existing_hashes[h]]["seeds"] = max(
+                                matched_torrents[existing_hashes[h]]["seeds"], tm["seeds"]
+                            )
+                            if tm.get("file_idx") and not matched_torrents[existing_hashes[h]].get("file_idx"):
+                                matched_torrents[existing_hashes[h]]["file_idx"] = tm["file_idx"]
+                        else:
+                            matched_torrents.append(tm)
+                            added_count += 1
+                            if h:
+                                existing_hashes[h] = len(matched_torrents) - 1
+                    log("TV", f"Torrentio merged {added_count} additional verified releases ({len(torrentio_matched)} matched) for {episode_tag}")
         except Exception as e:
-            log("TV", f"Torrentio notice: {e}")
+            log("TV", f"Torrentio query notice: {e}")
 
     # Filter out releases where seeds <= 0
-    valid_torrents = [t for t in matched_torrents if t["seeds"] > 0]
+    valid_torrents = [t for t in matched_torrents if t.get("seeds", 0) > 0]
     if not valid_torrents:
         raise RuntimeError(f"No active torrents with seeders > 0 found for TV episode '{show_name} {episode_tag}'. Swarms are inactive across APIBay, EZTV, and indexers.")
 
-    # Resolution-First Scoring & Candidate Ordering:
-    # 1. 1080p releases (non-REMUX) occupy the absolute top tier (+100,000 pts), sorted by seeders descending.
-    # 2. Releases of any other resolution must NEVER take precedence over an available 1080p candidate.
-    # 3. Higher resolutions (2160p / 4K / REMUX) act strictly as secondary fallbacks (+50,000 pts).
-    # 4. 720p (+25,000 pts) and SD (+10,000 pts) act as lower fallbacks.
-    def release_score(t: dict) -> int:
-        title = t.get("title", "")
+    # Release Tier Hierarchy for Subtitle Synchronization:
+    # 1. Tier 1 (Highest Priority): BluRay / BDRip releases (sorted by highest seeders among them).
+    # 2. Tier 2 (Fallback only): High-quality WEB-DL / WEBRip (sorted by highest seeders).
+    # 3. Strictly exclude CAM, Telesync, and low-grade HDTV releases.
+    # Gap of 600,000 points guarantees Tier 1 BluRay always precedes Tier 2 WEB-DL for subtitle sync.
+    def release_score(t: dict) -> float:
+        raw_text = (str(t.get("title", "")) + " " + str(t.get("filename", ""))).lower()
+        full_text = " " + re.sub(r'[\s._\-]+', ' ', raw_text) + " "
         seeds = int(t.get("seeds", 0) or 0)
 
-        is_remux = bool(re.search(r'\b(bdremux|remux|bluray-?remux|complete[\s._\-]*bluray)\b', title, re.IGNORECASE))
-        is_4k = bool(re.search(r'\b(2160p?|4k|uhd)\b', title, re.IGNORECASE))
-        is_1080 = bool(re.search(r'\b(1080p?|1920x1080)\b', title, re.IGNORECASE))
-        is_720 = bool(re.search(r'\b(720p?|1280x720)\b', title, re.IGNORECASE))
+        is_bluray = bool(re.search(r'\b(bluray|blu-ray|bdrip|brrip|bd-rip|bdr)\b', full_text))
+        is_web = bool(re.search(r'\b(web-?dl|webrip|web-?rip|amzn\s*web|nf\s*web|dsnp\s*web|hmax\s*web|web)\b', full_text))
 
-        if is_1080 and not is_remux and not is_4k:
-            base_score = 100000
-        elif is_4k or is_remux:
-            base_score = 50000
-        elif is_720:
-            base_score = 25000
+        is_remux = bool(re.search(r'\b(bdremux|remux|bluray-?remux|complete\s*bluray)\b', full_text))
+        is_4k = bool(re.search(r'\b(2160p?|4k|uhd)\b', full_text))
+        is_1080 = bool(re.search(r'\b(1080p?|1920x1080)\b', full_text))
+        is_720 = bool(re.search(r'\b(720p?|1280x720)\b', full_text))
+
+        # Base tier score: 600,000 pt gap guarantees Tier 1 BluRay always precedes Tier 2 WEB-DL
+        if is_bluray:
+            if preferred_quality == "720p":
+                base_score = 1000000.0 if is_720 else (900000.0 if is_1080 else 700000.0)
+            else:
+                base_score = 1000000.0 if (is_1080 and not is_remux and not is_4k) else (800000.0 if is_720 else 600000.0)
+        elif is_web:
+            if preferred_quality == "720p":
+                base_score = 400000.0 if is_720 else (300000.0 if is_1080 else 200000.0)
+            else:
+                base_score = 400000.0 if (is_1080 and not is_remux and not is_4k) else (300000.0 if is_720 else 200000.0)
         else:
-            base_score = 10000
+            base_score = 100000.0 if is_1080 else (80000.0 if is_720 else 50000.0)
 
-        # Cap seeders bonus at 10,000 so seed counts can never cross resolution tiers
-        return base_score + min(seeds, 10000)
+        # Within each tier, rank strictly by seeders count (capped at 20,000 so it can NEVER cross tiers)
+        seed_score = min(float(seeds), 20000.0)
+
+        # Subtle modifiers within tier
+        modifier = 0.0
+        if re.search(r'\b(psa|galaxytv|tgx|qxr|rarbg|x264)\b', full_text):
+            modifier += 200.0
+        if re.search(r'\b(megusta)\b', full_text):
+            modifier -= 2000.0
+        if re.search(r'\b(av1)\b', full_text):
+            modifier -= 1000.0
+
+        return base_score + seed_score + modifier
 
     valid_torrents.sort(key=release_score, reverse=True)
 
@@ -889,19 +973,26 @@ def fetch_tv_torrent(show_name: str, season_num: int, episode_num: int, imdb_id:
             q = "720p"
         else:
             q = "HDTV"
+        raw_vt = (str(vt.get("title", "")) + " " + str(vt.get("filename", ""))).lower()
+        clean_vt = " " + re.sub(r'[\s._\-]+', ' ', raw_vt) + " "
+        is_br = bool(re.search(r'\b(bluray|blu-ray|bdrip|brrip|bd-rip|bdr)\b', clean_vt))
+        is_wb = bool(re.search(r'\b(web-?dl|webrip|web-?rip|amzn\s*web|nf\s*web|dsnp\s*web|hmax\s*web|web)\b', clean_vt))
+        tier_label = "Tier 1 (BluRay)" if is_br else ("Tier 2 (WEB-DL)" if is_wb else "Standard")
         top_candidates.append({
             "title": vt.get("title"),
             "quality": q,
+            "tier": tier_label,
             "torrent_url": vt.get("torrent_url"),
             "magnet_uri": vt.get("magnet_uri"),
             "seeds": vt.get("seeds", 0),
             "size": vt.get("size", "Unknown"),
             "size_bytes": vt.get("size_bytes", 0),
-            "source": vt.get("source", "Unknown")
+            "source": vt.get("source", "Unknown"),
+            "file_idx": vt.get("file_idx")
         })
 
     selected_torrent = top_candidates[0]
-    log("TV", f"Selected release: '{selected_torrent.get('title')}' ({selected_torrent['quality']}, seeds: {selected_torrent.get('seeds')}, source: {selected_torrent.get('source')})")
+    log("TV", f"Selected release: '{selected_torrent.get('title')}' ({selected_torrent['quality']} - {selected_torrent.get('tier')}, seeds: {selected_torrent.get('seeds')}, source: {selected_torrent.get('source')})")
 
     result = selected_torrent.copy()
     result["candidates"] = top_candidates
@@ -1050,10 +1141,43 @@ def sanitize_download_dir(download_dir: str = DOWNLOAD_DIR, staging_dir: str = S
         os.makedirs(d, exist_ok=True)
     log("ARIA2", f"Purged and reset clean working directories: {download_dir} & {staging_dir}")
 
-def download_with_aria2(torrent_source: str, download_dir: str = DOWNLOAD_DIR, staging_dir: str = STAGING_DIR) -> str:
+def parse_aria2_speed(speed_str: str) -> float:
     """
-    Execute optimized aria2c download inside the cloud/Colab environment.
-    Completely purges download and staging directories first, then verifies downloaded video integrity with ffprobe.
+    Parses aria2 download speed string (e.g. '1.5MiB', '850KiB', '0B', '2.1MB/s') to MB/s float.
+    """
+    if not speed_str:
+        return 0.0
+    m = re.match(r'([0-9.]+)\s*([a-zA-Z]*)', speed_str.strip())
+    if not m:
+        return 0.0
+    val = float(m.group(1))
+    unit = m.group(2).lower()
+    if 'g' in unit:
+        return val * 1024.0
+    elif 'm' in unit:
+        return val
+    elif 'k' in unit:
+        return val / 1024.0
+    elif 'b' in unit:
+        return val / (1024.0 * 1024.0)
+    return val / (1024.0 * 1024.0)
+
+def download_with_aria2(
+    torrent_source: str,
+    download_dir: str = DOWNLOAD_DIR,
+    staging_dir: str = STAGING_DIR,
+    select_file: int = None,
+    min_speed_mb: float = 1.0,
+    timeout_check_start: float = 60.0,
+    timeout_check_limit: float = 90.0,
+    min_progress_pct: float = 5.0
+) -> str:
+    """
+    Execute optimized aria2c download with seed health monitoring and auto-skip for slow candidates.
+    Monitors download speed in real-time:
+    - If after 60-90s progress is under 5% or download speed is below 1 MB/s, terminates aria2
+      and logs: [ARIA2] ⚠️ Candidate is slow/dead (< 1 MB/s). Skipping to next candidate...
+      then raises RuntimeError so the pipeline immediately proceeds to the next candidate swarm.
     """
     # 1. Aggressive sanitization: wipe and recreate download & staging dirs
     sanitize_download_dir(download_dir, staging_dir)
@@ -1065,7 +1189,7 @@ def download_with_aria2(torrent_source: str, download_dir: str = DOWNLOAD_DIR, s
         "--max-connection-per-server=16",
         "--split=16",
         "--min-split-size=1M",
-        "--summary-interval=10",
+        "--summary-interval=2",
         "--seed-time=0",
         "--follow-torrent=mem",
         "--allow-overwrite=true",
@@ -1075,10 +1199,93 @@ def download_with_aria2(torrent_source: str, download_dir: str = DOWNLOAD_DIR, s
         "--bt-stop-timeout=90",
         "--disable-ipv6=true",
         "--bt-tracker-connect-timeout=10",
-        torrent_source
     ]
-    
-    proc = subprocess.run(cmd, capture_output=False, timeout=2700)
+    if select_file and isinstance(select_file, int) and select_file > 0:
+        cmd.append(f"--select-file={select_file}")
+    cmd.append(torrent_source)
+
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+        universal_newlines=True
+    )
+
+    out_q = queue.Queue()
+    def _reader(pipe, q):
+        try:
+            for l in iter(pipe.readline, ''):
+                q.put(l)
+        finally:
+            pipe.close()
+
+    reader_thread = threading.Thread(target=_reader, args=(proc.stdout, out_q), daemon=True)
+    reader_thread.start()
+
+    start_time = time.time()
+    last_speed_mb = 0.0
+    last_progress_pct = 0.0
+    aborted_slow = False
+    abort_msg = ""
+
+    while proc.poll() is None:
+        try:
+            line = out_q.get(timeout=1.0)
+        except queue.Empty:
+            line = None
+
+        if line:
+            line_str = line.strip()
+            if line_str:
+                if "DL:" in line_str or "(ETA:" in line_str:
+                    print(f"  [ARIA2] {line_str}")
+                p_match = re.search(r'\((\d+(?:\.\d+)?)%\)', line_str)
+                if p_match:
+                    last_progress_pct = float(p_match.group(1))
+                s_match = re.search(r'DL:([0-9.]+[a-zA-Z]+(?:/s)?)', line_str)
+                if s_match:
+                    last_speed_mb = parse_aria2_speed(s_match.group(1))
+
+        elapsed = time.time() - start_time
+        # Speed threshold health check: 60-90 seconds
+        if elapsed >= timeout_check_start:
+            is_slow = False
+            if elapsed >= timeout_check_start and last_progress_pct < min_progress_pct and last_speed_mb < min_speed_mb:
+                is_slow = True
+            elif elapsed >= timeout_check_limit and last_speed_mb < min_speed_mb:
+                is_slow = True
+
+            if is_slow:
+                aborted_slow = True
+                abort_msg = (
+                    f"Candidate is slow/dead (< {min_speed_mb:.1f} MB/s, progress: {last_progress_pct}%, "
+                    f"speed: {last_speed_mb:.2f} MB/s after {int(elapsed)}s)"
+                )
+                log("ARIA2", "⚠️ Candidate is slow/dead (< 1 MB/s). Skipping to next candidate...")
+                try:
+                    proc.terminate()
+                    proc.wait(timeout=3)
+                except Exception:
+                    try:
+                        proc.kill()
+                        proc.wait(timeout=2)
+                    except Exception:
+                        pass
+                sanitize_download_dir(download_dir, staging_dir)
+                raise RuntimeError(abort_msg)
+
+    # Drain any remaining lines
+    while not out_q.empty():
+        try:
+            rem_line = out_q.get_nowait()
+        except queue.Empty:
+            break
+
+    if aborted_slow:
+        raise RuntimeError(abort_msg)
+
     if proc.returncode != 0:
         raise RuntimeError(f"aria2c download failed with exit code {proc.returncode}")
 
@@ -1095,9 +1302,16 @@ def download_with_aria2(torrent_source: str, download_dir: str = DOWNLOAD_DIR, s
     if not video_files:
         raise FileNotFoundError(f"No video files found in {download_dir} after download.")
 
-    video_files.sort(key=lambda x: x[1], reverse=True)
-    target_video = video_files[0][0]
-    file_size_mb = video_files[0][1] / (1024 * 1024)
+    # Filter for real media files (> 50MB) to ignore stubs/samples
+    large_videos = [v for v in video_files if v[1] > 50 * 1024 * 1024]
+    if large_videos:
+        large_videos.sort(key=lambda x: x[1], reverse=True)
+        target_video = large_videos[0][0]
+        file_size_mb = large_videos[0][1] / (1024 * 1024)
+    else:
+        video_files.sort(key=lambda x: x[1], reverse=True)
+        target_video = video_files[0][0]
+        file_size_mb = video_files[0][1] / (1024 * 1024)
 
     # 3. Integrity verification: check moov atom and container readability via ffprobe
     log("ARIA2", f"Verifying container integrity of {os.path.basename(target_video)} ({file_size_mb:.2f} MB)...")
@@ -3956,28 +4170,36 @@ def run_pipeline(
             torrent_info = fetch_tv_torrent(parsed["show_name"], parsed["season_number"], parsed["episode_number"], target_imdb, fetch_quality)
             candidates = torrent_info.get("candidates") or [torrent_info]
 
-            # 3. High-Speed aria2c Download with Candidate Fallback Loop (up to 3 tries)
-            max_tries = min(3, len(candidates))
+            # 3. High-Speed aria2c Download with Candidate Fallback Loop (up to 6 tries)
+            max_tries = min(6, len(candidates))
+            target_candidate = candidates[0]
             for cand_idx in range(max_tries):
                 candidate = candidates[cand_idx]
                 download_source = candidate.get("torrent_url") or candidate.get("magnet_uri")
                 cand_title = candidate.get("title", "Unknown")
                 cand_seeds = candidate.get("seeds", 0)
-                log("PIPELINE", f"Attempting download candidate {cand_idx + 1}/{max_tries}: '{cand_title}' ({cand_seeds} seeds)...")
+                cand_file_idx = candidate.get("file_idx")
+                log("PIPELINE", f"Attempting download candidate {cand_idx + 1}/{max_tries}: '{cand_title}' ({cand_seeds} seeds, source: {candidate.get('source', 'Unknown')})...")
                 try:
-                    raw_video_path = download_with_aria2(download_source, DOWNLOAD_DIR, STAGING_DIR)
+                    raw_video_path = download_with_aria2(
+                        download_source,
+                        DOWNLOAD_DIR,
+                        STAGING_DIR,
+                        select_file=cand_file_idx
+                    )
                     if raw_video_path and os.path.exists(raw_video_path):
+                        target_candidate = candidate
                         log("PIPELINE", f"✅ Successfully downloaded video candidate {cand_idx + 1}: {os.path.basename(raw_video_path)}")
                         break
                 except Exception as e:
-                    log("PIPELINE", f"⚠️ Torrent download failed, trying next candidate release... (Candidate {cand_idx + 1} error: {e})")
+                    log("PIPELINE", f"⚠️ Torrent candidate {cand_idx + 1} failed or slow: {e}. Failing over to next candidate release...")
                     sanitize_download_dir(DOWNLOAD_DIR, STAGING_DIR)
 
             if not raw_video_path or not os.path.exists(raw_video_path):
                 raise RuntimeError(f"All {max_tries} torrent candidates failed to download for TV episode '{parsed['show_name']} {parsed['episode_tag']}'.")
 
             # 4. Fetch Arabic Subtitles (.srt) targeting exact Season & Episode with source release prioritization
-            source_title_info = candidate.get("title", "") if (isinstance(candidate, dict) and candidate.get("title")) else os.path.basename(raw_video_path)
+            source_title_info = target_candidate.get("title", "") if (isinstance(target_candidate, dict) and target_candidate.get("title")) else os.path.basename(raw_video_path)
             arabic_srt_path = download_subtitles_for_imdb(
                 target_imdb, DOWNLOAD_DIR,
                 season=parsed["season_number"],
