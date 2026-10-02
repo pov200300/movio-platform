@@ -1120,6 +1120,8 @@ def fetch_tv_torrent(show_name: str, season_num: int, episode_num: int, imdb_id:
         clean_vt = " " + re.sub(r'[\s._\-]+', ' ', raw_vt) + " "
         is_br = bool(re.search(r'\b(bluray|blu-ray|bdrip|brrip|bd-rip|bdr)\b', clean_vt))
         is_wb = bool(re.search(r'\b(web-?dl|webrip|web-?rip|amzn\s*web|nf\s*web|dsnp\s*web|hmax\s*web|web)\b', clean_vt))
+        is_single = bool(re.search(rf'\b(?:s0*{season_num}\s*e0*{episode_num}|0*{season_num}\s*x\s*0*{episode_num})\b', clean_vt))
+        is_pack = not is_single and bool(re.search(rf'\b(?:season\s*0*{season_num}\b|s0*{season_num}\b|s0*{season_num}\s*-\s*s0*\d+|complete)\b', clean_vt))
         tier_label = "Tier 1 (BluRay)" if is_br else ("Tier 2 (WEB-DL)" if is_wb else "Standard")
         top_candidates.append({
             "title": vt.get("title"),
@@ -1131,7 +1133,8 @@ def fetch_tv_torrent(show_name: str, season_num: int, episode_num: int, imdb_id:
             "size": vt.get("size", "Unknown"),
             "size_bytes": vt.get("size_bytes", 0),
             "source": vt.get("source", "Unknown"),
-            "file_idx": vt.get("file_idx")
+            "file_idx": vt.get("file_idx"),
+            "is_season_pack": is_pack
         })
 
     selected_torrent = top_candidates[0]
@@ -1305,11 +1308,281 @@ def parse_aria2_speed(speed_str: str) -> float:
         return val / (1024.0 * 1024.0)
     return val / (1024.0 * 1024.0)
 
+def bdecode(data):
+    """Simple robust bencode decoder in pure Python."""
+    if isinstance(data, str):
+        data = data.encode('latin1')
+    
+    def decode_item(idx):
+        char = data[idx:idx+1]
+        if char == b'i':
+            idx += 1
+            end = data.index(b'e', idx)
+            val = int(data[idx:end])
+            return val, end + 1
+        elif char == b'l':
+            idx += 1
+            items = []
+            while data[idx:idx+1] != b'e':
+                item, idx = decode_item(idx)
+                items.append(item)
+            return items, idx + 1
+        elif char == b'd':
+            idx += 1
+            d = {}
+            while data[idx:idx+1] != b'e':
+                key, idx = decode_item(idx)
+                val, idx = decode_item(idx)
+                if isinstance(key, bytes):
+                    try:
+                        key = key.decode('utf-8')
+                    except UnicodeDecodeError:
+                        key = key.decode('latin1')
+                d[key] = val
+            return d, idx + 1
+        elif char.isdigit():
+            colon = data.index(b':', idx)
+            length = int(data[idx:colon])
+            start = colon + 1
+            end = start + length
+            val = data[start:end]
+            return val, end
+        else:
+            raise ValueError(f"Invalid bencode character at {idx}: {char}")
+
+    val, _ = decode_item(0)
+    return val
+
+def check_episode_match(fname: str, season_num: int, episode_num: int) -> bool:
+    """
+    Checks if a filename or path strictly matches target season and episode.
+    Rejects filenames matching conflicting episode numbers (e.g. S01E01 when seeking S01E02).
+    """
+    ep_pattern = rf'(?:s0*{season_num}\s*e0*{episode_num}|0*{season_num}x0*{episode_num}|\be0*{episode_num}\b|ep\s*0*{episode_num}\b)'
+    if not re.search(ep_pattern, fname, re.IGNORECASE):
+        return False
+    
+    found_eps = set()
+    for m in re.finditer(r'\b(?:s0*\d+\s*e0*(\d+)|0*\d+\s*x\s*0*(\d+)|\be0*(\d+)\b|ep\s*0*(\d+)\b)', fname, re.IGNORECASE):
+        for g in m.groups():
+            if g is not None:
+                try:
+                    found_eps.add(int(g))
+                except ValueError:
+                    pass
+    
+    if found_eps and int(episode_num) not in found_eps:
+        return False
+        
+    return True
+
+def parse_aria2_show_files(output: str, season_num: int, episode_num: int) -> tuple:
+    """
+    Parses aria2c --show-files=true table output to identify 1-based file index for target episode.
+    """
+    lines = output.strip().splitlines()
+    candidates = []
+    for line in lines:
+        m = re.match(r'^\s*(\d+)\|.*?\|(.*)$', line)
+        if m:
+            idx = int(m.group(1))
+            path = m.group(2).strip()
+            fname = os.path.basename(path)
+            if fname.lower().endswith((".mp4", ".mkv", ".avi", ".webm", ".ts")):
+                if check_episode_match(fname, season_num, episode_num) or check_episode_match(path, season_num, episode_num):
+                    is_sample = "sample" in path.lower()
+                    candidates.append((idx, path, is_sample))
+
+    if not candidates:
+        return None, None
+
+    non_samples = [c for c in candidates if not c[2]]
+    chosen = non_samples[0] if non_samples else candidates[0]
+    return chosen[0], chosen[1]
+
+def inspect_torrent_file_index(
+    torrent_source: str,
+    season_num: int,
+    episode_num: int,
+    staging_dir: str = STAGING_DIR
+) -> tuple:
+    """
+    Inspects a torrent or magnet to determine the 1-based file index for target episode.
+    Returns (select_file_idx, matched_rel_path, source_to_use).
+    If inspection fails or cannot determine file index, returns (None, None, torrent_source).
+    """
+    if season_num is None or episode_num is None:
+        return None, None, torrent_source
+
+    target_tag = f"S{int(season_num):02d}E{int(episode_num):02d}"
+    video_extensions = (".mp4", ".mkv", ".avi", ".webm", ".ts")
+
+    def _find_best_index_from_info(info_dict):
+        files = info_dict.get("files")
+        if not files or not isinstance(files, list):
+            fname = info_dict.get("name", "")
+            if isinstance(fname, bytes):
+                fname = fname.decode('utf-8', errors='ignore')
+            if check_episode_match(fname, season_num, episode_num):
+                return 1, fname
+            return None, None
+
+        candidates = []
+        for idx, fentry in enumerate(files, 1):
+            path_parts = fentry.get("path", [])
+            parts_str = [p.decode('utf-8', errors='ignore') if isinstance(p, bytes) else str(p) for p in path_parts]
+            rel_path = "/".join(parts_str)
+            fname = parts_str[-1] if parts_str else ""
+            if fname.lower().endswith(video_extensions):
+                if check_episode_match(fname, season_num, episode_num) or check_episode_match(rel_path, season_num, episode_num):
+                    flen = fentry.get("length", 0)
+                    is_sample = "sample" in rel_path.lower()
+                    candidates.append((idx, rel_path, flen, is_sample))
+
+        if not candidates:
+            return None, None
+
+        non_samples = [c for c in candidates if not c[3]]
+        pool = non_samples if non_samples else candidates
+        pool.sort(key=lambda x: x[2], reverse=True)
+        return pool[0][0], pool[0][1]
+
+    # Case 1: Direct .torrent file on local disk
+    if os.path.exists(torrent_source) and torrent_source.lower().endswith(".torrent"):
+        try:
+            with open(torrent_source, "rb") as f:
+                decoded = bdecode(f.read())
+            info = decoded.get("info", {})
+            idx, pth = _find_best_index_from_info(info)
+            if idx:
+                log("ARIA2", f"🎯 Pre-selected episode file index from local torrent: #{idx} -> '{pth}' for {target_tag}")
+                return idx, pth, torrent_source
+        except Exception as e:
+            log("ARIA2", f"Notice: failed to parse local torrent: {e}")
+
+    # Case 2: HTTP/HTTPS URL returning .torrent
+    if torrent_source.startswith("http://") or torrent_source.startswith("https://"):
+        try:
+            r = requests.get(torrent_source, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
+            if r.status_code == 200 and len(r.content) > 50 and r.content.startswith(b'd'):
+                saved_torrent = os.path.join(staging_dir, "inspected_release.torrent")
+                with open(saved_torrent, "wb") as f:
+                    f.write(r.content)
+                decoded = bdecode(r.content)
+                info = decoded.get("info", {})
+                idx, pth = _find_best_index_from_info(info)
+                if idx:
+                    log("ARIA2", f"🎯 Pre-selected episode file index from HTTP torrent: #{idx} -> '{pth}' for {target_tag}")
+                    return idx, pth, saved_torrent
+        except Exception:
+            pass
+
+    # Case 3: Magnet URI -> Fast metadata pre-fetch with aria2c
+    if torrent_source.startswith("magnet:"):
+        meta_dir = os.path.join(staging_dir, "meta_inspect")
+        os.makedirs(meta_dir, exist_ok=True)
+        cmd = [
+            "aria2c",
+            f"--dir={meta_dir}",
+            "--bt-metadata-only=true",
+            "--bt-save-metadata=true",
+            "--bt-stop-timeout=25",
+            "--seed-time=0",
+            "--follow-torrent=mem",
+            "--disable-ipv6=true",
+            "--bt-tracker-connect-timeout=10",
+            torrent_source
+        ]
+        try:
+            log("ARIA2", f"Fetching magnet metadata for {target_tag} selective download inspection...")
+            subprocess.run(cmd, timeout=30, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            for f in os.listdir(meta_dir):
+                if f.endswith(".torrent"):
+                    tpath = os.path.join(meta_dir, f)
+                    with open(tpath, "rb") as tf:
+                        decoded = bdecode(tf.read())
+                    info = decoded.get("info", {})
+                    idx, pth = _find_best_index_from_info(info)
+                    if idx:
+                        log("ARIA2", f"🎯 Pre-selected episode file index from magnet metadata: #{idx} -> '{pth}' for {target_tag}")
+                        return idx, pth, tpath
+        except Exception as e:
+            log("ARIA2", f"Notice: magnet metadata prefetch skipped/timed out: {e}")
+
+    return None, None, torrent_source
+
+def resolve_downloaded_video_file(
+    download_dir: str,
+    season_num: int = None,
+    episode_num: int = None
+) -> str:
+    """
+    Strict video file resolver for single videos and multi-file season packs.
+    If season_num and episode_num are provided:
+    - Enforces exact regex matching for the target episode.
+    - Excludes files matching a conflicting other episode (e.g. S01E01 when looking for S01E02).
+    - Picks the largest matching video file (> 50MB) if multiple matches exist.
+    - NEVER falls back to a file for a different episode; raises FileNotFoundError.
+    """
+    video_extensions = (".mp4", ".mkv", ".avi", ".webm", ".ts")
+    video_files = []
+    for root, _, files in os.walk(download_dir):
+        for f in files:
+            if f.lower().endswith(video_extensions):
+                fpath = os.path.join(root, f)
+                try:
+                    sz = os.path.getsize(fpath)
+                    if sz > 0:
+                        video_files.append((fpath, sz, f))
+                except OSError:
+                    pass
+
+    if not video_files:
+        raise FileNotFoundError(f"No video files found in '{download_dir}' after download.")
+
+    # 1. TV Episode Resolution
+    if season_num is not None and episode_num is not None:
+        target_tag = f"S{int(season_num):02d}E{int(episode_num):02d}"
+        
+        matching_videos = []
+        for fpath, sz, fname in video_files:
+            if check_episode_match(fname, season_num, episode_num):
+                matching_videos.append((fpath, sz, fname))
+
+        if not matching_videos:
+            available = [f for _, _, f in video_files]
+            raise FileNotFoundError(
+                f"STRICT MISMATCH: Target episode {target_tag} video file not found in '{download_dir}'. "
+                f"Found {len(video_files)} video file(s) for other episodes/releases: {available}. "
+                f"Refusing to use an incorrect episode file!"
+            )
+
+        # Filter for real media files (> 50MB) to ignore stubs/samples
+        large_matches = [v for v in matching_videos if v[1] > 50 * 1024 * 1024]
+        target_pool = large_matches if large_matches else matching_videos
+        non_samples = [v for v in target_pool if "sample" not in v[2].lower()]
+        if non_samples:
+            target_pool = non_samples
+        target_pool.sort(key=lambda x: x[1], reverse=True)
+        chosen_file = target_pool[0][0]
+        log("ARIA2", f"🎯 Strict episode match: '{os.path.basename(chosen_file)}' ({target_pool[0][1]/(1024*1024):.1f} MB) for {target_tag}")
+        return chosen_file
+
+    # 2. Movie Resolution (or unassigned episode)
+    large_videos = [v for v in video_files if v[1] > 50 * 1024 * 1024]
+    non_samples = [v for v in large_videos if "sample" not in v[2].lower()]
+    pool = non_samples if non_samples else (large_videos if large_videos else video_files)
+    pool.sort(key=lambda x: x[1], reverse=True)
+    return pool[0][0]
+
 def download_with_aria2(
     torrent_source: str,
     download_dir: str = DOWNLOAD_DIR,
     staging_dir: str = STAGING_DIR,
     select_file: int = None,
+    season_num: int = None,
+    episode_num: int = None,
+    is_season_pack: bool = False,
     min_speed_mb: float = 1.0,
     timeout_check_start: float = 60.0,
     timeout_check_limit: float = 90.0,
@@ -1322,6 +1595,17 @@ def download_with_aria2(
       and logs: [ARIA2] ⚠️ Candidate is slow/dead (< 1 MB/s). Skipping to next candidate...
       then raises RuntimeError so the pipeline immediately proceeds to the next candidate swarm.
     """
+    # 0. Selective File Resolution for TV Season Packs & Multi-File Torrents
+    if season_num is not None and episode_num is not None:
+        if not select_file or is_season_pack:
+            inspected_idx, inspected_path, inspected_src = inspect_torrent_file_index(
+                torrent_source, season_num, episode_num, staging_dir
+            )
+            if inspected_idx:
+                select_file = inspected_idx
+                torrent_source = inspected_src
+                log("ARIA2", f"🎯 Season pack selective download active: selecting file #{select_file} ('{inspected_path}')")
+
     # 1. Aggressive sanitization: wipe and recreate download & staging dirs
     sanitize_download_dir(download_dir, staging_dir)
     log("ARIA2", f"Starting multi-connection download into {download_dir}...")
@@ -1472,29 +1756,13 @@ def download_with_aria2(
     if proc.returncode != 0:
         raise RuntimeError(f"aria2c download failed with exit code {proc.returncode}")
 
-    # 2. Locate downloaded video file strictly created during current run
-    video_files = []
-    for root, _, files in os.walk(download_dir):
-        for f in files:
-            if f.lower().endswith((".mp4", ".mkv", ".avi", ".webm")):
-                fpath = os.path.join(root, f)
-                sz = os.path.getsize(fpath)
-                if sz > 0:
-                    video_files.append((fpath, sz))
-
-    if not video_files:
-        raise FileNotFoundError(f"No video files found in {download_dir} after download.")
-
-    # Filter for real media files (> 50MB) to ignore stubs/samples
-    large_videos = [v for v in video_files if v[1] > 50 * 1024 * 1024]
-    if large_videos:
-        large_videos.sort(key=lambda x: x[1], reverse=True)
-        target_video = large_videos[0][0]
-        file_size_mb = large_videos[0][1] / (1024 * 1024)
-    else:
-        video_files.sort(key=lambda x: x[1], reverse=True)
-        target_video = video_files[0][0]
-        file_size_mb = video_files[0][1] / (1024 * 1024)
+    # 2. Strict episode / video file resolution
+    target_video = resolve_downloaded_video_file(
+        download_dir=download_dir,
+        season_num=season_num,
+        episode_num=episode_num
+    )
+    file_size_mb = os.path.getsize(target_video) / (1024 * 1024)
 
     # 3. Integrity verification: check moov atom and container readability via ffprobe
     log("ARIA2", f"Verifying container integrity of {os.path.basename(target_video)} ({file_size_mb:.2f} MB)...")
@@ -4400,7 +4668,10 @@ def run_pipeline(
                         download_source,
                         DOWNLOAD_DIR,
                         STAGING_DIR,
-                        select_file=cand_file_idx
+                        select_file=cand_file_idx,
+                        season_num=parsed["season_number"],
+                        episode_num=parsed["episode_number"],
+                        is_season_pack=candidate.get("is_season_pack", False)
                     )
                     if raw_video_path and os.path.exists(raw_video_path):
                         target_candidate = candidate
