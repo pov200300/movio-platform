@@ -1,4 +1,4 @@
-import { getMovieBySlug, getLatestMovies, parseMovieData } from '../../../lib/api';
+import { getMovieBySlug, getLatestMovies, parseMovieData, getDualQualityDownloadLinks } from '../../../lib/api';
 import VideoPlayer from '../../../components/VideoPlayer';
 import MovieCard from '../../../components/MovieCard';
 import Image from 'next/image';
@@ -154,8 +154,11 @@ export default async function MoviePage({ params }) {
 
   const movieTitle = (movie.cleanTitle || movie.title || movie.displayTitle || movie.rawTitle || 'الفيلم').trim();
 
-  // Derive direct download URL
-  const downloadUrl = getDownloadUrl(movie);
+  // Derive dual-quality download links (1080p Vidmoly & 720p Fast Streamtape/StreamHG)
+  const download1080 = movie.download1080 || null;
+  const download720 = movie.download720 || null;
+  const provider720 = movie.provider720 || 'Streamtape';
+  const legacyDownloadUrl = getDownloadUrl(movie);
 
   // Fetch related movies for bottom recommendations
   const allMovies = await getLatestMovies(10);
@@ -201,23 +204,68 @@ export default async function MoviePage({ params }) {
               <a href="#player-section" className={styles.actionBtnPlay}>
                 ▶ تشغيل الفيلم
               </a>
-              {downloadUrl ? (
-                <a 
-                  href={downloadUrl} 
-                  target="_blank" 
-                  rel="noopener noreferrer" 
-                  className={styles.actionBtnDownload}
-                >
-                  ⬇ سيرفر التحميل
-                </a>
-              ) : (
-                <span 
-                  className={`${styles.actionBtnDownload} ${styles.actionBtnDownloadDisabled}`}
-                  aria-disabled="true"
-                >
-                  التحميل غير متوفر حالياً
-                </span>
-              )}
+
+              {/* Dual-Quality Download Options */}
+              <div className={styles.dualDownloadBox}>
+                <div className={styles.downloadBoxHeader}>
+                  <span className={styles.downloadHeaderIcon}>⬇</span>
+                  <span className={styles.downloadHeaderText}>سيرفرات التحميل المباشر:</span>
+                </div>
+
+                <div className={styles.downloadButtonsStack}>
+                  {/* 1080p FHD Vidmoly Download Button */}
+                  {download1080 && (
+                    <a 
+                      href={download1080} 
+                      target="_blank" 
+                      rel="noopener noreferrer" 
+                      className={`${styles.actionBtnDownload} ${styles.actionBtnDownload1080}`}
+                      title="تحميل الفيلم بجودة Full HD 1080p فائقة الدقة عبر Vidmoly"
+                    >
+                      <span className={styles.badgeDownload1080}>1080p FHD</span>
+                      <span className={styles.btnDownloadText}>تحميل 1080p (FHD - Vidmoly)</span>
+                    </a>
+                  )}
+
+                  {/* 720p Fast Streamtape / StreamHG Download Button */}
+                  {download720 && (
+                    <a 
+                      href={download720} 
+                      target="_blank" 
+                      rel="noopener noreferrer" 
+                      className={`${styles.actionBtnDownload} ${styles.actionBtnDownload720}`}
+                      title={`تحميل الفيلم بجودة 720p عالية السرعة عبر ${provider720}`}
+                    >
+                      <span className={styles.badgeDownload720}>720p Fast</span>
+                      <span className={styles.btnDownloadText}>تحميل 720p (HD فائق السرعة - {provider720})</span>
+                    </a>
+                  )}
+
+                  {/* Single fallback download link if neither 1080p nor 720p is resolved */}
+                  {!download1080 && !download720 && legacyDownloadUrl && (
+                    <a 
+                      href={legacyDownloadUrl} 
+                      target="_blank" 
+                      rel="noopener noreferrer" 
+                      className={styles.actionBtnDownload}
+                      title="تحميل الفيلم"
+                    >
+                      <span className={styles.btnDownloadText}>⬇ سيرفر التحميل المباشر</span>
+                    </a>
+                  )}
+
+                  {/* Disabled state when no download servers are found */}
+                  {!download1080 && !download720 && !legacyDownloadUrl && (
+                    <span 
+                      className={`${styles.actionBtnDownload} ${styles.actionBtnDownloadDisabled}`}
+                      aria-disabled="true"
+                      title="سيرفرات التحميل قيد التجهيز لهذا الفيلم"
+                    >
+                      التحميل غير متوفر حالياً
+                    </span>
+                  )}
+                </div>
+              </div>
             </div>
           </div>
 
@@ -313,7 +361,56 @@ export default async function MoviePage({ params }) {
             directStreamUrl={movie.directStreamUrl}
             posterUrl={movie.posterUrl} 
             title={movie.rawTitle} 
+            download1080={download1080}
+            download720={download720}
+            provider720={provider720}
           />
+
+          {/* Dual-Quality Download Bar under Player */}
+          {(download1080 || download720 || legacyDownloadUrl) && (
+            <div className={styles.playerDownloadBar}>
+              <div className={styles.playerDownloadTitle}>
+                <span className={styles.playerDownloadIcon}>📥</span>
+                <span>تحميل الفيلم مباشرة إلى جهازك:</span>
+              </div>
+              <div className={styles.playerDownloadActions}>
+                {download1080 && (
+                  <a
+                    href={download1080}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className={`${styles.playerDownloadBtn} ${styles.playerDownloadBtn1080}`}
+                    title="تحميل مباشر 1080p عبر Vidmoly"
+                  >
+                    <span className={styles.badgeDownload1080}>1080p FHD</span>
+                    <span>تحميل 1080p (FHD - Vidmoly)</span>
+                  </a>
+                )}
+                {download720 && (
+                  <a
+                    href={download720}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className={`${styles.playerDownloadBtn} ${styles.playerDownloadBtn720}`}
+                    title={`تحميل فائق السرعة 720p عبر ${provider720}`}
+                  >
+                    <span className={styles.badgeDownload720}>720p Fast</span>
+                    <span>تحميل 720p (HD فائق السرعة - {provider720})</span>
+                  </a>
+                )}
+                {!download1080 && !download720 && legacyDownloadUrl && (
+                  <a
+                    href={legacyDownloadUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className={styles.playerDownloadBtn}
+                  >
+                    <span>⬇ سيرفر التحميل المباشر</span>
+                  </a>
+                )}
+              </div>
+            </div>
+          )}
         </section>
 
         {/* Related Movies Section */}

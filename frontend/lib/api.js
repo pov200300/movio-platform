@@ -186,6 +186,126 @@ export function getVidmolyMirrorUrl(url, targetDomain = null) {
 }
 
 /**
+ * Safely extracts Vidmoly alphanumeric file code from any Vidmoly URL or code string.
+ */
+export function getVidmolyFileCode(url) {
+  if (!url || typeof url !== 'string') return null;
+  const cleanUrl = url.trim();
+  let match = cleanUrl.match(/(?:embed-|embed\/|v\/|dl\/)([a-zA-Z0-9]+)/i);
+  if (!match) {
+    match = cleanUrl.match(/vidmoly\.[a-z0-9-]+\/([a-zA-Z0-9]+)(?:\.html)?/i);
+  }
+  if (!match && /^[a-zA-Z0-9]{6,}$/.test(cleanUrl)) {
+    match = [null, cleanUrl];
+  }
+  if (match && match[1]) {
+    const fileCode = match[1];
+    const reserved = ['embed', 'api', 'upload', 'dl', 'contact', 'faq'];
+    if (!reserved.includes(fileCode.toLowerCase())) {
+      return fileCode;
+    }
+  }
+  return null;
+}
+
+/**
+ * Returns clean direct download URL for Vidmoly (1080p FHD):
+ * https://vidmoly.to/dl/{fileCode}
+ */
+export function getVidmolyDownloadUrl(url) {
+  const code = getVidmolyFileCode(url);
+  return code ? `https://vidmoly.to/dl/${code}` : null;
+}
+
+/**
+ * Converts Streamtape embed URL (https://streamtape.com/e/{code})
+ * to its direct high-speed view/download URL (https://streamtape.com/v/{code}).
+ */
+export function getStreamtapeDownloadUrl(url) {
+  if (!url || typeof url !== 'string') return null;
+  const cleanUrl = url.trim();
+  const match = cleanUrl.match(/streamtape\.[a-z0-9-]+\/(?:e|v)\/([a-zA-Z0-9_-]+)/i);
+  if (match && match[1]) {
+    return `https://streamtape.com/v/${match[1]}`;
+  }
+  if (cleanUrl.includes('streamtape')) {
+    return cleanUrl.replace('/e/', '/v/');
+  }
+  return null;
+}
+
+/**
+ * Converts StreamHG / HgCloud embed URL (https://hgcloud.to/e/{code})
+ * to its direct view/download URL (https://hgcloud.to/v/{code}).
+ */
+export function getStreamhgDownloadUrl(url) {
+  if (!url || typeof url !== 'string') return null;
+  const cleanUrl = url.trim();
+  const match = cleanUrl.match(/(?:streamhg(?:api)?\.[a-z0-9-]+|hgcloud\.[a-z0-9-]+)\/(?:e|v|d)\/([a-zA-Z0-9_-]+)/i);
+  if (match && match[1]) {
+    return `https://hgcloud.to/v/${match[1]}`;
+  }
+  if (cleanUrl.includes('hgcloud') || cleanUrl.includes('streamhg')) {
+    return cleanUrl.replace('/e/', '/v/');
+  }
+  return null;
+}
+
+/**
+ * Extracts dual-quality download links (1080p Vidmoly & 720p Fast Streamtape/StreamHG)
+ * for a movie or post object.
+ */
+export function getDualQualityDownloadLinks(movie) {
+  if (!movie) return { download1080: null, download720: null, provider720: null };
+
+  // 1. Vidmoly 1080p Download Link
+  let vidmolySource = movie.vidmolyEmbed || movie.vidmoly_url || movie.vidmoly_embed || null;
+  if (!vidmolySource && Array.isArray(movie.servers)) {
+    const vServer = movie.servers.find(s => s && (s.id === 'vidmoly' || (s.name && s.name.toLowerCase().includes('vidmoly')) || (s.url && s.url.includes('vidmoly'))));
+    if (vServer) vidmolySource = vServer.url;
+  }
+  if (!vidmolySource && movie.embed_url_1080p && movie.embed_url_1080p.includes('vidmoly')) {
+    vidmolySource = movie.embed_url_1080p;
+  }
+  if (!vidmolySource && movie.primaryEmbed && movie.primaryEmbed.includes('vidmoly')) {
+    vidmolySource = movie.primaryEmbed;
+  }
+
+  const download1080 = getVidmolyDownloadUrl(vidmolySource);
+
+  // 2. 720p Fast Download Link: Prioritize Streamtape first for uncapped download speed
+  let streamtapeSource = movie.streamtapeEmbed || movie.streamtape_url || movie.streamtape_embed || null;
+  if (!streamtapeSource && Array.isArray(movie.servers)) {
+    const sServer = movie.servers.find(s => s && (s.id === 'streamtape' || (s.name && s.name.toLowerCase().includes('streamtape')) || (s.url && s.url.includes('streamtape'))));
+    if (sServer) streamtapeSource = sServer.url;
+  }
+  if (!streamtapeSource && movie.embed_url_720p && (movie.embed_url_720p.includes('streamtape') || movie.embed_url_720p.includes('strtape'))) {
+    streamtapeSource = movie.embed_url_720p;
+  }
+
+  let download720 = getStreamtapeDownloadUrl(streamtapeSource);
+  let provider720 = download720 ? 'Streamtape' : null;
+
+  // Fallback gracefully to StreamHG if Streamtape is unavailable
+  if (!download720) {
+    let streamhgSource = movie.streamhgEmbed || movie.streamhg_url || movie.streamhg_embed ||
+                         movie.hgcloudEmbed || movie.hgcloud_url || movie.hgcloud_embed || null;
+    if (!streamhgSource && Array.isArray(movie.servers)) {
+      const hServer = movie.servers.find(s => s && (s.id === 'streamhg' || s.id === 'hgcloud' || (s.url && (s.url.includes('streamhg') || s.url.includes('hgcloud')))));
+      if (hServer) streamhgSource = hServer.url;
+    }
+    if (!streamhgSource && movie.embed_url_720p && (movie.embed_url_720p.includes('streamhg') || movie.embed_url_720p.includes('hgcloud'))) {
+      streamhgSource = movie.embed_url_720p;
+    }
+
+    download720 = getStreamhgDownloadUrl(streamhgSource);
+    if (download720) provider720 = 'StreamHG';
+  }
+
+  return { download1080, download720, provider720 };
+}
+
+/**
  * Extract featured image URL from an embedded WP post object or fallback
  */
 export function getFeaturedImage(post) {
@@ -536,6 +656,16 @@ export function parseMovieData(post) {
                           null;
   const secureDirectStream = enforceHttps(rawDirectStream);
 
+  const { download1080, download720, provider720 } = getDualQualityDownloadLinks({
+    vidmolyEmbed: vidmolyUrl,
+    streamhgEmbed: streamhgUrl,
+    streamtapeEmbed: streamtapeUrl,
+    servers,
+    primaryEmbed,
+    embed_url_1080p: meta.embed_url_1080p,
+    embed_url_720p: meta.embed_url_720p,
+  });
+
   return {
     id: post.id,
     slug: post.slug,
@@ -566,6 +696,9 @@ export function parseMovieData(post) {
     embedUrl1080p: vidmolyUrl || doodstreamUrl || primaryEmbed,
     embedUrl720p: streamhgUrl || streamtapeUrl || primaryEmbed,
     servers,
+    download1080,
+    download720,
+    provider720,
     downloadUrl: secureDownloadUrl,
     download_url: secureDownloadUrl,
     directStreamUrl: secureDirectStream,

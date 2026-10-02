@@ -509,3 +509,22 @@
     justify-content: center;
   }
 }
+
+.tabBadge {
+  font-size: 0.68rem;
+  font-weight: 800;
+  padding: 2px 7px;
+  border-radius: 4px;
+  color: #ffffff;
+  letter-spacing: 0.3px;
+  line-height: 1.2;
+}
+
+.tabBadgeVip {
+  background: var(--accent-red);
+}
+
+.tabBadgeFast {
+  background: #059669;
+}
+

@@ -2,7 +2,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import Image from 'next/image';
 import CinemaPlayer from './CinemaPlayer';
-import { normalizeStreamHgUrl, normalizeVidmolyUrl, getVidmolyMirrorUrl, formatVidmolyEmbed } from '../lib/api';
+import { normalizeStreamHgUrl, normalizeVidmolyUrl, getVidmolyMirrorUrl, formatVidmolyEmbed, getDualQualityDownloadLinks } from '../lib/api';
 import styles from './VideoPlayer.module.css';
 
 // Provider label mapping for clean Arabic display
@@ -49,6 +49,9 @@ export default function VideoPlayer({
   embedHtml,
   posterUrl,
   title,
+  download1080,
+  download720,
+  provider720,
 }) {
   const [isPlaying, setIsPlaying] = useState(false);
   const [streamUrl, setStreamUrl] = useState(directStreamUrl || null);
@@ -174,6 +177,11 @@ export default function VideoPlayer({
     }
   }, [resolvedServers, activeServerId]);
 
+  // Ensure vidmoly.to is ALWAYS the immediate default domain upon first load or server/episode switch
+  useEffect(() => {
+    setUseVidmolyMirror(false);
+  }, [activeServerId, slug]);
+
   // Active Server details & mirror fallback URL resolution
   const activeServer = resolvedServers.find((s) => s.id === activeServerId) || resolvedServers[0];
   const rawActiveUrl = activeServer?.url || null;
@@ -190,6 +198,20 @@ export default function VideoPlayer({
   }, [rawActiveUrl, isVidmoly, useVidmolyMirror]);
 
   const activeUrl = formattedServerUrl;
+
+  // Derive dual-quality download links (1080p Vidmoly & 720p Fast Streamtape/StreamHG)
+  const resolvedDownloads = useMemo(() => {
+    if (download1080 || download720) {
+      return { download1080, download720, provider720: provider720 || 'Streamtape' };
+    }
+    return getDualQualityDownloadLinks({
+      vidmolyEmbed,
+      streamhgEmbed: streamhgEmbed || hgcloudEmbed,
+      streamtapeEmbed,
+      servers: resolvedServers,
+      primaryEmbed: primaryEmbed || embedUrl,
+    });
+  }, [download1080, download720, provider720, vidmolyEmbed, streamhgEmbed, hgcloudEmbed, streamtapeEmbed, resolvedServers, primaryEmbed, embedUrl]);
 
   // Resolve direct stream link for optional EGYMAX VIP player
   const resolveStream = useCallback(async () => {
@@ -327,6 +349,34 @@ export default function VideoPlayer({
               >
                 <span>🔄 مرآة بديلة: {useVidmolyMirror ? 'vidmoly.to' : 'vidmoly.biz'}</span>
               </button>
+            )}
+
+            {/* Dual-Quality Quick Download Buttons in Player */}
+            {resolvedDownloads.download1080 && (
+              <a
+                href={resolvedDownloads.download1080}
+                target="_blank"
+                rel="noopener noreferrer"
+                className={styles.serverTab}
+                style={{ borderColor: 'rgba(56, 189, 248, 0.4)', color: '#38bdf8', textDecoration: 'none' }}
+                title="تحميل الفيلم بجودة 1080p FHD عبر Vidmoly"
+              >
+                <span>📥 تحميل 1080p</span>
+                <span className={`${styles.tabBadge} ${styles.tabBadgeVip}`} style={{ background: '#0284c7' }}>FHD</span>
+              </a>
+            )}
+            {resolvedDownloads.download720 && (
+              <a
+                href={resolvedDownloads.download720}
+                target="_blank"
+                rel="noopener noreferrer"
+                className={styles.serverTab}
+                style={{ borderColor: 'rgba(52, 211, 153, 0.4)', color: '#34d399', textDecoration: 'none' }}
+                title={`تحميل فائق السرعة 720p عبر ${resolvedDownloads.provider720 || 'سيرفر سريع'}`}
+              >
+                <span>⚡ تحميل 720p</span>
+                <span className={`${styles.tabBadge} ${styles.tabBadgeFast}`} style={{ background: '#059669' }}>Fast</span>
+              </a>
             )}
           </div>
         </div>
